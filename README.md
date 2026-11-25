@@ -82,7 +82,7 @@ A fresh profile maps the right face buttons to A/B/X/Y, the left D-pad to four d
 
 Choose **Learn** beside an action, then press and hold just the physical input you want to use. For a full grab click, hold the first stage before choosing Learn, then squeeze through the second stage. If a trigger or grab produces travel without a distinct click, choose Learn at rest (or with the first stage held), pull to the desired position, choose **Capture held travel**, release, then choose **Confirm release**. Choose **Save to board** to apply your changes.
 
-Stick axes are experimental and start disabled. Check each stick’s axes, direction and centering in **Live inputs**, then enable only the sticks you want under **Bindings**.
+Stick axes are experimental and start disabled. **Live inputs** shows the raw X and Y readings from each controller. Enable the sticks you want under **Bindings**. From firmware 4.0.1, all three USB layouts invert each stick’s Y reading when sending it to the game.
 
 ## Calibrate touch and sensitivity
 

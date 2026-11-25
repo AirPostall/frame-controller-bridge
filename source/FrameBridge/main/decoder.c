@@ -208,6 +208,15 @@ static uint8_t touch_trigger_level(const hand_state hands[HAND_COUNT], const pad
     return (uint8_t)((progress * 255 + range / 2) / range);
 }
 
+static int16_t inverted_stick_y(int16_t y)
+{
+    // The signed 16-bit range has one extra negative value. Swap both end stops
+    // explicitly so each USB layout can still report full travel in both directions.
+    if (y == INT16_MIN) return INT16_MAX;
+    if (y == INT16_MAX) return INT16_MIN;
+    return -y;
+}
+
 pad_report pad_compose(const hand_state hands[HAND_COUNT], const pad_profile *p)
 {
     pad_report report = {0};
@@ -238,7 +247,8 @@ pad_report pad_compose(const hand_state hands[HAND_COUNT], const pad_profile *p)
         }
         if (p->stick_flags & (1U << h)) {
             uint8_t *axis = &report.bytes[3 + 4*h];
-            uint16_t x = (uint16_t)hands[h].x, y = (uint16_t)hands[h].y;
+            uint16_t x = (uint16_t)hands[h].x;
+            uint16_t y = (uint16_t)inverted_stick_y(hands[h].y);
             axis[0] = (uint8_t)x; axis[1] = (uint8_t)(x >> 8);
             axis[2] = (uint8_t)y; axis[3] = (uint8_t)(y >> 8);
         }

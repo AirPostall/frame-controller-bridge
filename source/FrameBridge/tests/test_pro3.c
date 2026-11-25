@@ -17,7 +17,15 @@ int main(void)
 {
     assert(PRO3_INPUT_ID == 4 && PRO3_INPUT_PAYLOAD_SIZE == 31);
     uint8_t expected[PRO3_INPUT_PAYLOAD_SIZE] = {8, 127, 127, 127, 127};
-    pad_report r = {.bytes = {[2] = 8}};
+    hand_state hands[HAND_COUNT] = {
+        {.x = -16384, .y = INT16_MIN}, {.x = 16384, .y = INT16_MAX}
+    };
+    pad_profile profile = pad_defaults();
+    profile.stick_flags = 3;
+    pad_report r = pad_compose(hands, &profile);
+    check_packet(&r, (uint8_t[PRO3_INPUT_PAYLOAD_SIZE]){8, 63, 255, 191, 0});
+    profile.stick_flags = 0;
+    r = pad_compose(hands, &profile);
     check_packet(&r, expected);
 
     // Each legacy action drives exactly its corresponding HID Button usage.

@@ -3,6 +3,14 @@
 #include <stdio.h>
 #include <string.h>
 
+static void check_sticks(const pad_report *report, const int16_t expected[4])
+{
+    for (unsigned i = 0; i < 4; ++i) {
+        const uint8_t *axis = &report->bytes[3 + i * 2];
+        assert((axis[0] | (axis[1] << 8)) == (uint16_t)expected[i]);
+    }
+}
+
 static void test_touch_triggers(void)
 {
     pad_profile p = pad_defaults();
@@ -156,9 +164,29 @@ int main(void)
     assert(pad_decode(&hands[1],unknown,sizeof(unknown)));
     assert(hands[1].buttons == 1);
 
+    // Opposite raw Y endpoints invert in the full-resolution and Standard layouts.
+    const uint8_t opposite[] = {0x14,8,1,0,0,0x40,0,0x80,0,0};
+    assert(pad_decode(&hands[1], opposite, sizeof(opposite)));
     profile.stick_flags = 3;
-    r = pad_compose(hands,&profile);
-    assert(!memcmp(r.bytes+3,pressed+4,4) && !memcmp(r.bytes+7,pressed+4,4));
+    r = pad_compose(hands, &profile);
+    check_sticks(&r, (int16_t[]){-128, INT16_MIN, 16384, INT16_MAX});
+    uint8_t standard_axes[11];
+    pad_standard_report(&r, standard_axes);
+    assert(!memcmp(standard_axes, (uint8_t[]){0, 129, 63, 127}, 4));
+
+    hands[0].y = -1234;
+    hands[1].y = 5678;
+    r = pad_compose(hands, &profile);
+    check_sticks(&r, (int16_t[]){-128, 1234, 16384, -5678});
+
+    hands[0].y = 0;
+    profile.stick_flags = 1;
+    r = pad_compose(hands, &profile);
+    check_sticks(&r, (int16_t[]){-128, 0, 0, 0});
+    profile.stick_flags = 2;
+    r = pad_compose(hands, &profile);
+    check_sticks(&r, (int16_t[]){0, 0, 16384, -5678});
+    profile.stick_flags = 3;
     assert(pad_decode(&hands[1],released,sizeof(released)));
     r = pad_compose(hands,&profile);
     assert(r.bytes[0] == 0 && r.bytes[2] == 4 && r.bytes[7] == 0);
