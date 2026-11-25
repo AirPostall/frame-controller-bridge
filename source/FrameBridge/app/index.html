@@ -18,6 +18,15 @@
 <div class="bindings"><table aria-label="Controller button bindings">
 <thead><tr><th scope="col">8BitDo Pro 3</th><th scope="col">Steam Frame button</th><th scope="col">Actual bit</th></tr></thead>
 <tbody id="bindings"></tbody></table></div>
+<div id="binding-feedback" hidden>
+  <p id="binding-message" role="status" aria-atomic="true"></p>
+  <div id="pull-tools" hidden>
+    <button id="pull-capture">Capture held travel</button>
+    <select id="pull-channel" aria-label="Press travel field" hidden></select>
+    <button id="pull-confirm" hidden>Confirm release</button>
+  </div>
+  <button id="cancel" hidden>Cancel learn</button>
+</div>
 <article id="analog-routing" class="wide" hidden><h2>Analog trigger sources</h2>
 <p>Choose a calibrated touch surface to vary a Pro 3 trigger from 0 to 255. In Touch, set Release at for zero output and Engage at for full output. A bound digital trigger press always gives full output.</p>
 <div class="choices"><label>Left trigger <select id="lt-source"></select></label><label>Right trigger <select id="rt-source"></select></label></div></article>
@@ -42,5 +51,5 @@
 <div id="candidates" hidden><label>Candidate signal <select id="candidate-list"></select></label><p id="candidate-value"></p><button id="use-candidate">Use this signal</button></div>
 <div class="choices"><label>Engage at <input type="number" id="engage" min="0" max="255" step="1"></label><label>Release at <input type="number" id="release" min="0" max="255" step="1"></label><label>Gamepad output <select id="sensor-action"></select></label></div></article>
 </section>
-<div id="editor" hidden><div id="pull-tools" hidden><button id="pull-capture">Capture held travel</button><select id="pull-channel" aria-label="Press travel field" hidden></select><button id="pull-confirm" hidden>Confirm release</button></div><div class="actions"><button id="save" class="primary" disabled>Save to board</button><button id="defaults">Restore defaults</button><button id="cancel" hidden>Cancel learn</button></div><p id="message" role="status"></p></div>
+<div id="editor" hidden><div class="actions"><button id="save" class="primary" disabled>Save to board</button><button id="defaults">Restore defaults</button></div><p id="message" role="status"></p></div>
 </main></body></html>

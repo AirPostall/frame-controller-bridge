@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-set(PROJECT_VER "4.0.2")
+set(PROJECT_VER "4.0.3")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(frame_bridge)
 

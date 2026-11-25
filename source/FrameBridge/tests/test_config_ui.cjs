@@ -31,9 +31,21 @@ function fixtureDocument() {
     get textContent() { return this.content + this.children.map(node => node.textContent).join(''); }
     set textContent(value) { this.content = String(value); this.children = []; }
     get valueAsNumber() { return this.value === '' ? NaN : Number(this.value); }
+    contains(other) {
+      for (let node = other; node; node = node.parentElement) if (node === this) return true;
+      return false;
+    }
     setAttribute(name, value) { this.attributes[name] = String(value); }
     getAttribute(name) { return this.attributes[name] ?? null; }
-    append(...nodes) { for (const node of nodes) { node.parentElement = this; this.children.push(node); } }
+    append(...nodes) {
+      for (const node of nodes) {
+        if (node.parentElement) {
+          node.parentElement.children = node.parentElement.children.filter(child => child !== node);
+        }
+        node.parentElement = this;
+        this.children.push(node);
+      }
+    }
     replaceChildren(...nodes) { this.children = []; this.content = ''; this.append(...nodes); }
     focus() { document.activeElement = this; }
     click() { if (!this.disabled) this.onclick?.({target:this}); }
@@ -121,6 +133,38 @@ async function testUI(document, EventType = Event) {
     for (const id of ['live','mapping','sensors']) assert.equal(!!el(id).hidden, id !== section);
     assert.equal(el(button).getAttribute('aria-pressed'), 'true');
   }
+  function learn(action) {
+    // Intercept the same method on every element, including the shared Cancel button.
+    const prototype = document.defaultView?.Element.prototype || Object.getPrototypeOf(el('cancel'));
+    const original = Object.getOwnPropertyDescriptor(prototype, 'scrollIntoView');
+    let calls = 0;
+    Object.defineProperty(prototype, 'scrollIntoView', {configurable:true, value:() => { ++calls; }});
+    try {
+      click('learn-' + action);
+      assert.equal(calls, 0, 'Learn must keep the current scroll position');
+    } finally {
+      if (original) Object.defineProperty(prototype, 'scrollIntoView', original);
+      else delete prototype.scrollIntoView;
+    }
+  }
+  function rowFeedback(action, expected) {
+    const panel = el('binding-feedback'), cell = el('action-' + action).parentElement;
+    const children = [...cell.children];
+    assert.equal(cell.tagName, 'TH');
+    assert.equal(panel.parentElement, cell);
+    assert.equal(children[children.indexOf(panel) - 1].className, 'binding-controls');
+    assert.ok(!panel.hidden);
+    for (const id of ['binding-message','cancel','pull-tools','pull-capture','pull-channel','pull-confirm']) {
+      assert.ok(panel.contains(el(id)), id + ' must follow the selected row');
+    }
+    assert.match(content('binding-message'), expected);
+    assert.doesNotMatch(content('message'), expected, 'Binding feedback belongs in its row');
+  }
+  function noRowPrompt() {
+    assert.ok(el('binding-feedback').hidden || !content('binding-message').trim(), 'Stale binding prompt');
+    assert.ok(el('cancel').hidden);
+    assert.ok(el('pull-tools').hidden);
+  }
 
   assert.equal(content('network'), 'Board connected');
   assert.equal(live('left','click',5).state, 'pressed');
@@ -144,13 +188,43 @@ async function testUI(document, EventType = Event) {
   assert.deepEqual([...el('bit-5').children].map(n => n.textContent), ['Left bit 5', 'Left bit 6']);
   assert.equal(content('bit-18'), 'Left travel · 0x14 byte 7');
   assert.equal(content('bit-21'), '—');
-  click('learn-21'); state.masks[1] = 1; await poll();
+  learn(2); rowFeedback(2, /hold.*B/i);
+  assert.ok(!el('cancel').hidden && el('pull-tools').hidden);
+  state.masks[1] = 3; await poll();
+  rowFeedback(2, /several bits|one button/i);
+
+  learn(16); rowFeedback(16, /capture.*travel/i);
+  assert.ok(![...el('action-2').parentElement.children].includes(el('binding-feedback')));
+  assert.ok(!el('pull-tools').hidden && !el('pull-capture').hidden);
+  click('pull-capture'); rowFeedback(16, /no clear press travel/i);
+  raw[0][14] = 140; raw[0][15] = 105; await poll();
+  click('pull-capture'); rowFeedback(16, /two.*fields|choose.*field/i);
+  assert.ok(!el('pull-channel').hidden && !el('pull-confirm').hidden);
+  el('pull-channel').value = '1';
+  click('pull-confirm'); rowFeedback(16, /release/i);
+  raw[0][14] = raw[0][15] = 0; await poll();
+  click('pull-confirm'); rowFeedback(16, /travel learned/i);
+  assert.ok(el('cancel').hidden && el('pull-tools').hidden);
+  assert.equal(content('bit-16'), 'Left travel · 0x14 byte 7');
+
+  learn(2); click('cancel'); rowFeedback(2, /cancel/i);
+  assert.ok(el('cancel').hidden);
+  learn(2); click('clear-16'); rowFeedback(16, /cleared/i);
+  assert.ok(el('cancel').hidden && el('pull-tools').hidden);
+  assert.equal(content('bit-16'), '—');
+  state.masks[1] = 0; await poll();
+  learn(21); state.masks[1] = 1; await poll();
+  rowFeedback(21, /Right bit 0.*L4/);
   assert.deepEqual(['action-21','binding-21','bit-21'].map(content), ['L4','Right A','Right bit 0']);
   assert.equal(content('binding-1'), 'Unbound');
   assert.equal(content('dirty'), 'Unsaved changes');
 
+  learn(2); rowFeedback(2, /hold.*B/i);
   tab('live-tab','live');
+  state.masks[1] |= 2; await poll();
   assert.equal(live('right','click',0).output, 'A', 'Live must show the saved mapping');
+  tab('map-tab','mapping'); noRowPrompt();
+  assert.equal(content('bit-2'), '—', 'Leaving the tab must cancel a pending Learn');
 
   tab('sensors-tab','sensors');
   assert.equal(el('touch-left-list').children.length, 9);
@@ -185,7 +259,10 @@ async function testUI(document, EventType = Event) {
   tab('live-tab','live'); assert.equal(live('right','analog',0).state, 'offline');
   online = true; await poll();
   tab('map-tab','mapping'); assert.equal(content('bit-21'), 'Right bit 0');
+  learn(2); rowFeedback(2, /hold.*B/i);
   click('save'); await new Promise(resolve => setImmediate(resolve));
+  assert.match(content('message'), /saved to board/i);
+  noRowPrompt();
   assert.equal(writes.length, 1);
   assert.equal(boardProfile[18], 21);
   assert.equal(boardProfile[97], 140);

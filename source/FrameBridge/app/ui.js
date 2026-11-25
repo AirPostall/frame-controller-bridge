@@ -22,6 +22,7 @@ let saved, draft, latest, learning = 0, previousMasks, previousUp;
 let timer, busy = false, saving = false;
 const label = (id, value) => { const el=byId(id); if(el.textContent!==String(value)) el.textContent=value; };
 const note = value => label('message', value);
+const bindingNote = value => label('binding-message', value);
 const bindingIndex = (side, bit) => 2 + side * 16 + bit;
 const usbLayout = state => state?.usbLayout ?? (state?.standardUsb ? 1 : 0);
 
@@ -153,9 +154,25 @@ function clearAction(action) {
   const index=travelActions.indexOf(action);
   if(index>=0) draft.fill(0,travelOffset(index),travelOffset(index)+3);
 }
+function showBindingFeedback(cell) {
+  const panel = byId('binding-feedback');
+  if (panel.parentElement !== cell) cell.append(panel);
+  panel.hidden = false;
+  note('');
+}
+function endBinding(message = '') {
+  const panel = byId('binding-feedback');
+  if (learning && message && !document.hidden && panel.contains(document.activeElement)) {
+    byId('learn-' + learning).focus({preventScroll:true});
+  }
+  learning = 0;
+  pull = null;
+  bindingNote(message);
+  panel.hidden = !message;
+}
 function learnFrom(state) {
   if(pull && (!state.up[pull.hand] || state.epoch[pull.hand]!==pull.epoch)) {
-    pull=null; learning=0;note('Controller disconnected. Start learning again.');redrawBindings();return;
+    endBinding('Controller disconnected. Start learning again.');redrawBindings();return;
   }
   if(pull?.candidates) return;
   // A reconnect or a button already held when learning starts is not a new press.
@@ -165,12 +182,12 @@ function learnFrom(state) {
     for(let b=0;b<16;b++) if(rising & (1<<b)) edges.push([h,b]);
   }
   previousMasks=state.masks.slice(); previousUp=state.up.slice();
-  if(edges.length>1){note('Several bits changed. Release them and press one button.');return;}
+  if(edges.length>1){bindingNote('Several bits changed. Release them and press one button.');return;}
   if(edges.length!==1) return;
   const [h,b]=edges[0], index=bindingIndex(h,b), old=draft[index], action=learning;
-  clearAction(action); draft[index]=action; learning=0;
+  clearAction(action); draft[index]=action;
   const layout = usbLayout(state);
-  note(sides[h]+' bit '+b+' → '+outputName(action, layout)+(old && old!==action ? ' (previously '+outputName(old, layout)+')' : '')+'. Save to apply.');
+  endBinding(sides[h]+' bit '+b+' → '+outputName(action, layout)+(old && old!==action ? ' (previously '+outputName(old, layout)+')' : '')+'. Save to apply.');
   redrawBindings();
 }
 const liveRows = [];
@@ -326,7 +343,8 @@ async function poll() {
     if(reconnect) redrawBindings();
   } catch(e) {
     if(wizard || alternatives.length) stopWizard('Board disconnected. Reconnect and start the capture again.');
-    latest=null; previews=[0,0]; previousEpoch=null; learning=0;
+    if(learning) endBinding('Board disconnected. Reconnect and choose Learn again.');
+    latest=null; previews=[0,0]; previousEpoch=null;
     label('sensor-value','—'); byId('sensor-meter').value=0;
     label('touch-left','Left · offline'); label('touch-right','Right · offline'); label('network','Board disconnected'); label('usb','USB · unknown');
     for(const side of ['left','right']){
@@ -344,7 +362,7 @@ async function poll() {
 }
 function openView(view) {
   currentView=view;
-  learning=0;
+  endBinding();
   stopWizard();
   for(const [tab,section] of [['live-tab','live'],['map-tab','mapping'],['sensors-tab','sensors']]){
     byId(section).hidden=view!==section;
@@ -361,6 +379,7 @@ names.slice(1).forEach((_, i) => {
   title.scope = 'row';
   const name = document.createElement('strong');
   name.id = 'action-' + a;
+  title.setAttribute('aria-labelledby', name.id);
   name.textContent = pro3RowTitles[a] || pro3Name(a);
   const alternate = document.createElement('small');
   alternate.id = 'layout-name-' + a;
@@ -381,6 +400,7 @@ names.slice(1).forEach((_, i) => {
   row.append(title, physical, bit);
   learn.onclick=()=>{
     if(!latest) return;
+    showBindingFeedback(title);
     learning=a; pull=null;
     previousMasks=latest.masks.slice(); previousUp=latest.up.slice();
     const index=travelActions.indexOf(a), h=Math.floor(index/3);
@@ -388,13 +408,21 @@ names.slice(1).forEach((_, i) => {
       pull={hand:h,epoch:latest.epoch[h],rest:travelBytes(latest,h)};
     }
     const output = outputName(a, usbLayout(latest));
-    const prompt=index>=0 ? 'Hold the '+learnTarget(a)+' press. If no click appears, capture the held travel below.' :
+    const prompt=pull ? 'Hold the '+learnTarget(a)+' press. If no click appears, choose Capture held travel.' :
       'Release other controls, then hold the button for '+output+'.';
-    note(prompt);
+    bindingNote(prompt);
     redrawBindings();
-    byId('cancel').scrollIntoView?.({block:'nearest'});
   };
-  clear.onclick=()=>{clearAction(a);learning=0;note('Binding cleared. Save to apply.');redrawBindings();};
+  clear.onclick=()=>{
+    showBindingFeedback(title);
+    clearAction(a);
+    const focused = document.activeElement;
+    if (!learn.disabled && (focused===clear || byId('binding-feedback').contains(focused))) {
+      learn.focus({preventScroll:true});
+    }
+    endBinding('Binding cleared. Save to apply.');
+    redrawBindings();
+  };
   byId('bindings').append(row);
 });
 function travelBytes(state,h) {
@@ -408,7 +436,7 @@ byId('pull-capture').onclick=()=>{
     const delta=v-pull.rest[i];
     if(Math.abs(delta)>=12) candidates.push({channel:i+1,rest:pull.rest[i],delta});
   });
-  if(!candidates.length) {note('No clear press travel in either field. Hold the physical press and retry.');return;}
+  if(!candidates.length) {bindingNote('No clear press travel in either field. Hold the physical press and retry.');return;}
   pull.candidates=candidates;
   const select=byId('pull-channel');
   select.replaceChildren();
@@ -418,21 +446,23 @@ byId('pull-capture').onclick=()=>{
     select.append(opt);
   });
   select.value='0';
-  note((candidates.length>1?'Two press fields changed. Choose the field you intend to use. ':'')+
+  bindingNote((candidates.length>1?'Two press fields changed. Choose the field you intend to use. ':'')+
     'Release the control, then confirm.');
+  const advanceFocus = document.activeElement===byId('pull-capture');
   redrawBindings();
+  if(advanceFocus) (candidates.length>1 ? select : byId('pull-confirm')).focus({preventScroll:true});
 };
 byId('pull-confirm').onclick=()=>{
   if(!learning || !pull?.candidates || !latest) return;
   const c=pull.candidates[Number(byId('pull-channel').value)];
   const current=travelBytes(latest,pull.hand)[c.channel-1];
   if((current-c.rest)*Math.sign(c.delta)>Math.max(4,Math.abs(c.delta)*.2)) {
-    note('Release to the starting position, then confirm.');return;
+    bindingNote('Release to the starting position, then confirm.');return;
   }
   clearAction(learning);
   const o=travelOffset(travelActions.indexOf(learning));
   draft.set([c.channel,Math.round(c.rest+.35*c.delta),Math.round(c.rest+.65*c.delta)],o);
-  learning=0;pull=null;note('Press travel learned. Save to apply.');redrawBindings();
+  endBinding('Press travel learned. Save to apply.');redrawBindings();
 };
 names.forEach((name,i)=>{
   const option=document.createElement('option');
@@ -448,9 +478,9 @@ triggerSelectors.forEach((id, side) => {
     redrawBindings();
   };
 });
-byId('cancel').onclick=()=>{learning=0;note('Learning canceled.');redrawBindings();};
+byId('cancel').onclick=()=>{endBinding('Learning canceled.');redrawBindings();};
 byId('defaults').onclick=()=>{draft=defaultProfile.slice();previews=[0,0];stopWizard('Defaults staged. Save to apply.');
-  learning=0;note('Defaults restored in this view. Save to apply.');redrawBindings();};
+  endBinding();note('Defaults restored in this view. Save to apply.');redrawBindings();};
 byId('export').onclick = () => {
   const json = JSON.stringify(BindingBackup.encode(draft), null, 2);
   const url = URL.createObjectURL(new Blob([json], {type:'application/json'}));
@@ -468,8 +498,7 @@ byId('backup-file').onchange = async event => {
   event.target.value = '';
   if (!file || saving) return;
   saving = true;
-  learning = 0;
-  pull = null;
+  endBinding();
   stopWizard();
   redrawBindings();
   try {
@@ -487,7 +516,7 @@ byId('backup-file').onchange = async event => {
   }
 };
 byId('save').onclick=async()=>{
-  saving=true;learning=0;stopWizard();redrawBindings();
+  saving=true;endBinding();stopWizard();redrawBindings();
   const submitted=draft.slice();
   try{await request('/api/profile',{method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:submitted});
     saved=submitted;updateLiveBindings(latest);note('Saved to board.');}
@@ -500,7 +529,8 @@ byId('live-tab').onclick=()=>openView('live');
 byId('map-tab').onclick=()=>openView('mapping');
 byId('sensors-tab').onclick=()=>openView('sensors');
 document.addEventListener('visibilitychange',()=>{
-  clearTimeout(timer);learning=0;
+  clearTimeout(timer);
+  if(document.hidden && learning) endBinding('Learning paused. Choose Learn to try again.');
   if(document.hidden && wizard) stopWizard('Capture paused. Start again when ready.');
   redrawBindings();if(!document.hidden) poll();
 });

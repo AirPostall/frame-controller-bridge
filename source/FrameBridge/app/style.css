@@ -14,6 +14,10 @@ select{font:inherit;border:1px solid var(--rule);border-radius:8px;padding:8px 1
 .binding-layout{color:var(--muted);font-size:12px;font-weight:500}
 .binding-controls{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
 .binding-controls button{min-height:32px;padding:4px 9px;font-size:13px;font-weight:500}
+#binding-feedback{margin-top:7px;color:var(--ink);font-size:14px;font-weight:400}
+#binding-message{margin:0}
+#binding-feedback button,#binding-feedback select{max-width:100%;margin:5px 0 0;padding:4px 8px;min-height:32px;font-size:13px}
+#pull-tools{display:flex;flex-wrap:wrap;gap:4px}
 .bindings td:last-child{font:13px/1.5 ui-monospace,monospace}
 
 /* Live and Touch inventories share one hand per column at tablet widths. */
