@@ -50,7 +50,7 @@ static esp_err_t snapshot(httpd_req_t *req)
     }
     snprintf(body, sizeof(body),
         "{\"raw\":[\"%s\",\"%s\"],\"seen\":[%u,%u],\"epoch\":[%lu,%lu],\"active\":[%u,%u],\"usb\":%u,\"usbLayout\":%u,\"standardUsb\":%u,\"up\":[%u,%u],\"masks\":[%u,%u],\"axes\":[[%d,%d],[%d,%d]],"
-        "\"touch\":%d,\"packets\":[%lu,%lu],\"buttons\":%u,\"hat\":%u,"
+        "\"touch\":%d,\"travel\":[%u,%u],\"packets\":[%lu,%lu],\"buttons\":%u,\"hat\":%u,"
         "\"triggers\":[%u,%u],\"bad\":%lu,\"overflows\":%lu}",
         raw[0], raw[1], s.hands[0].seen, s.hands[1].seen,
         (unsigned long)s.epoch[0], (unsigned long)s.epoch[1], s.hands[0].active, s.hands[1].active,
@@ -58,6 +58,7 @@ static esp_err_t snapshot(httpd_req_t *req)
         s.connected[0], s.connected[1], s.hands[0].buttons, s.hands[1].buttons,
         s.hands[0].x, s.hands[0].y, s.hands[1].x, s.hands[1].y,
         pad_touch_level(&s.hands[RIGHT_HAND], &s.profile.touch[RIGHT_HAND][0]),
+        s.hands[0].pressed_travel, s.hands[1].pressed_travel,
         (unsigned long)s.packets[0], (unsigned long)s.packets[1],
         pad_usb_buttons(&s.output), s.output.bytes[2],
         s.output.trigger_level[0], s.output.trigger_level[1],

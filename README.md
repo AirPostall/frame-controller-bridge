@@ -66,16 +66,16 @@ After either procedure, wait for esptool to finish verifying the image. Tap RESE
 
 1. Wake both controllers and disconnect them from any headset or other BLE host that is using them. To start pairing on a hand, hold **Steam** and the thin **View/Menu** button together until it beeps. Each hand connects and reconnects independently.
 2. With the firmware running, **tap BOOT once**. On a phone or computer, join the board’s `FrameBridge-XXXX` Wi-Fi network with password `frame-setup`. Stay connected if the device reports that the network has no internet.
-3. Open the [board setup page](http://192.168.4.1/). In **Live inputs**, check that each hand’s packet counter advances and its controls respond. A second device can display this page while the USB host runs a game.
+3. Open the [board setup page](http://192.168.4.1/). In **Live inputs**, the bound controls are listed by hand, including released buttons. Press, touch or squeeze a control to check its saved assignment. The packet counters and raw stick readings are available on the same tab. A second device can display this page while the USB host runs a game.
 4. When you finish, tap BOOT again to close setup Wi-Fi. It also closes automatically after 30 minutes. Saved mappings run on the board while Wi-Fi is off.
 
 ## Bind clicks, grips and sticks
 
-A fresh profile maps the right face buttons to A/B/X/Y, the left D-pad to four directions, and each bumper and stick click to its matching side. Left View sends Select, left Steam sends Start, and right Menu sends Home. Trigger and grab presses start unbound. The Pro 3 layout exposes these additional choices in **Bindings**.
+A fresh profile maps the right face buttons to A/B/X/Y, the left D-pad to four directions, and each bumper and stick click to its matching side. Left View sends Select, left Steam sends Start, and right Menu sends Home. Trigger and grab presses start unbound. The **Bindings** table shows the Pro 3 output, the Steam Frame button assigned to it, and its actual left or right report bit. A learned travel input shows its report byte. Unknown buttons retain their hand and bit number.
 
 | Binding in setup | Gamepad output |
 | --- | --- |
-| L trigger / R trigger | LT / RT |
+| Left trigger / right trigger | L2 / R2 |
 | L grab / R grab | PL / PR |
 | L grab full click / R grab full click | L4 / R4 |
 | Right Steam | Home, shared with the Home binding |
@@ -88,12 +88,12 @@ Stick axes are experimental and start disabled. **Live inputs** shows the raw X 
 
 Every touch surface starts **uncalibrated** on a fresh profile. Learn each surface you want to use on your own controllers. The left D-pad offers one shared touch contact and four separately bindable directional clicks.
 
-1. Under **Touch**, select the hand and control, then choose **Learn touch**. Keep the controller steady and nearby fingers still. Touch lightly without clicking. For a grip sensor, lift and rest just the selected finger.
+1. Under **Touch**, both hands’ surfaces are listed with their calibration and output. Select a surface from either hand to open its editor, then choose **Learn touch**. Keep the controller steady and nearby fingers still. Touch lightly without clicking. For a grip sensor, lift and rest just the selected finger.
 2. Follow the five **Capture** prompts in order. Alternate between lifted, touching, lifted, touching and lifted. If several candidate signals move, preview one and move the target finger and adjacent fingers independently. Choose **Use this signal** once it follows the intended finger.
 3. Adjust **Engage at** and **Release at** for a continuous signal. A signal that rises on contact takes a higher engage level than release level. For a falling signal, reverse that order. Select an optional **Gamepad output** to hold a button or D-pad direction while touched. Choose **Save to board**, then confirm the result under **Live touches**.
-4. For an analog output, open **Bindings → Analog trigger sources** and select a calibrated surface for LT or RT. Its release level gives zero and its engage level gives full output (255). Widen the gap for a gentler response. Binary sensors give only the two endpoints. A learned digital trigger press still gives full output.
+4. For an analog output, open **Bindings → Analog trigger sources** and select a calibrated surface for the left (L2) or right (R2) trigger. Its release level gives zero and its engage level gives full output (255). Widen the gap for a gentler response. Binary sensors give only the two endpoints. A learned digital trigger press still gives full output.
 
-For example, learn the right A surface and assign its contact to **R grab (PR)**. A light touch should activate PR. Pressing through the click should add A. Watch both outputs in **Live inputs**, then try the gesture on the host.
+For example, learn the right A surface and assign its contact to the **PR** output in the Pro 3 layout. A light touch should activate PR. Pressing through the click should add A. Watch both outputs in **Live inputs**, then try the gesture on the host.
 
 To back up or transfer your setup, choose **Bindings → Export JSON**. The file captures the settings shown, including unsaved edits. **Import JSON** stages a saved profile for review. Choose **Save to board** to apply it. Controller addresses and the USB layout are set separately in the firmware pairing page.
 
