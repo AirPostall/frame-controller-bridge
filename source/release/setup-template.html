@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Set up controllers · Frame Controller Bridge</title>
+<style>
+:root{color-scheme:light dark;font:17px/1.5 system-ui,sans-serif}
+body{max-width:36rem;margin:6vh auto;padding:0 1.3rem}
+h1{font-size:clamp(2rem,7vw,3rem);line-height:1.04;letter-spacing:-.05em}
+label{display:block;font-weight:650;margin:1.1rem 0 .25rem}
+input,select,button{box-sizing:border-box;font:inherit;border:1px solid #87958f;border-radius:.4rem;padding:.6rem .75rem;width:100%}
+input{font-family:ui-monospace,monospace}button{background:#116954;color:white;border:0;margin-top:1.3rem;cursor:pointer;font-weight:650}
+p{margin:.65rem 0}output{display:block;margin:1rem 0;font-weight:600}code{overflow-wrap:anywhere}
+h2{font-size:1.2rem;margin:1.5rem 0 .4rem}li+li{margin-top:.55rem}ol{padding-left:1.25rem}
+button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #398a76;outline-offset:3px}
+</style>
+</head>
+<body>
+<main><p>Frame Controller Bridge · ESP32-S3</p><h1>Set up controllers</h1>
+<p>Use a Bluetooth LE scanner that shows advertised device addresses. Wake one controller at a time to identify the left and right hands. If a hand is missing, disconnect it from the headset and hold its Steam and View/Menu buttons together until it beeps.</p>
+<p>Enter each address as six pairs of hex digits separated by colons. This page runs offline and writes both addresses into your downloaded firmware.</p>
+<form id="settings">
+<label for="left">Left controller</label><input id="left" value="@@LEFT@@" required autocomplete="off" spellcheck="false" autocapitalize="characters">
+<label for="right">Right controller</label><input id="right" value="@@RIGHT@@" required autocomplete="off" spellcheck="false" autocapitalize="characters">
+<label for="layout">USB layout</label><select id="layout"><option value="2">8BitDo Pro 3 · wired compatibility test</option><option value="1">Standard · generic HID</option><option value="0">Extended · original 16-bit sticks</option></select>
+<button type="submit">Download paired firmware</button>
+</form>
+<output id="message" aria-live="polite"></output>
+<h2>Flash your board</h2>
+<ol>
+<li>Copy <code>frame_bridge-paired.bin</code> from Downloads into the extracted release’s <code>firmware</code> folder.</li>
+<li>Open <a href="README.md">README.md</a> and follow the flashing instructions for your board. For an existing compatible install, write <code>frame_bridge-paired.bin</code> at <code>0x10000</code>. For a fresh board, include the bootloader, partition table and paired application.</li>
+</ol>
+<p>The bundled <code>flash_args</code> lists the stock <code>frame_bridge.bin</code>. For a full flash using this file, change the application filename on its <code>0x10000</code> line to <code>frame_bridge-paired.bin</code> in your extracted copy.</p>
+</main>
+<script type="application/octet-stream" id="image">@@IMAGE@@</script>
+<script>
+'use strict';
+const layout = @@LAYOUT@@;
+document.getElementById('layout').value = String(layout.defaultMode);
+
+function address(text) {
+  const value = text.trim().toUpperCase();
+  if (!/^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(value))
+    throw Error('Enter six pairs of hex digits separated by colons for each controller.');
+  if (value === 'FF:FF:FF:FF:FF:FF' || value === '00:00:00:00:00:00')
+    throw Error('Enter the advertised address for each controller. All-zero and all-FF addresses are reserved.');
+  return value;
+}
+
+async function pairedImage(left, right, mode) {
+  const addresses = [address(left), address(right)];
+  if (addresses[0] === addresses[1]) throw Error('Choose a different address for each hand.');
+  if (!['0', '1', '2'].includes(mode)) throw Error('Choose a USB layout.');
+  if (!globalThis.crypto?.subtle) throw Error('Open the local setup file in a current Safari or Chrome browser.');
+  const source = document.getElementById('image').textContent.trim();
+  const bytes = Uint8Array.from(atob(source), char => char.charCodeAt(0));
+  const fields = new TextEncoder().encode(addresses[0] + '\0' + addresses[1] + '\0');
+  // XOR out the old record and XOR in its replacement inside the ESP segment checksum.
+  function setByte(offset, value) {
+    bytes[layout.checksum] ^= bytes[offset] ^ value;
+    bytes[offset] = value;
+  }
+  for (const [i, value] of fields.entries()) setByte(layout.record + i, value);
+  setByte(layout.record + fields.length, Number(mode));
+  const hashAt = layout.checksum + 1;
+  const digest = await crypto.subtle.digest('SHA-256', bytes.subarray(0, hashAt));
+  bytes.set(new Uint8Array(digest), hashAt);
+  return bytes;
+}
+
+document.getElementById('settings').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector('button');
+  const message = document.getElementById('message');
+  button.disabled = true;
+  try {
+    const get = id => document.getElementById(id).value;
+    const bytes = await pairedImage(get('left'), get('right'), get('layout'));
+    const url = URL.createObjectURL(new Blob([bytes], {type:'application/octet-stream'}));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'frame_bridge-paired.bin';
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    message.textContent = 'Firmware prepared. Use frame_bridge-paired.bin in the flashing steps below.';
+  } catch (error) {
+    message.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+</script></body></html>

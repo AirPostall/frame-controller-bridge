@@ -1,0 +1,284 @@
+#include "decoder.h"
+#include <string.h>
+
+_Static_assert(offsetof(pad_profile, trigger_source) == V3_PROFILE_BYTES, "v3 profile prefix");
+_Static_assert(sizeof(pad_profile) == 174, "profile wire layout");
+_Static_assert(sizeof(pad_report) == 14, "packed report state");
+
+static uint16_t u16le(const uint8_t *p) { return p[0] | ((uint16_t)p[1] << 8); }
+
+pad_profile pad_defaults(void)
+{
+    pad_profile p = {.version = PROFILE_VERSION, .binding = {
+        {PAD_DOWN, PAD_RIGHT, PAD_LEFT, PAD_UP, 0, PAD_LB, PAD_L3, 0, PAD_START, PAD_SELECT},
+        {PAD_A, PAD_B, PAD_X, PAD_Y, 0, PAD_RB, PAD_R3, 0, 0, PAD_HOME}
+    }};
+    for (unsigned h = 0; h < HAND_COUNT; ++h)
+        for (unsigned i = 0; i < TOUCH_SLOTS; ++i)
+            p.touch[h][i].channel = NO_CHANNEL;
+    return p;
+}
+
+static unsigned field_mask(unsigned mode)
+{
+    if (mode == WHOLE_BYTE) return 255;
+    if (mode == LOW_NIBBLE) return 15;
+    if (mode == HIGH_NIBBLE) return 240;
+    return 1U << (mode - BIT_ZERO);
+}
+
+bool pad_profile_valid(const pad_profile *p)
+{
+    if (p->version != PROFILE_VERSION || p->stick_flags > 3) return false;
+    for (unsigned h = 0; h < HAND_COUNT; h++) {
+        unsigned source = p->trigger_source[h];
+        if (source) {
+            unsigned index = source - 1;
+            if (index >= HAND_COUNT * TOUCH_SLOTS ||
+                p->touch[index / TOUCH_SLOTS][index % TOUCH_SLOTS].channel == NO_CHANNEL)
+                return false;
+        }
+        unsigned used[RAW_CHANNELS] = {0};
+        for (unsigned i = 0; i < TRAVEL_SLOTS; i++) {
+            const press_binding *b = &p->travel[h][i];
+            if (b->channel > 2 || (b->channel && b->release == b->engage)) return false;
+        }
+        for (unsigned b = 0; b < 16; b++)
+            if (p->binding[h][b] >= ACTION_COUNT) return false;
+        for (unsigned i = 0; i < TOUCH_SLOTS; i++) {
+            const touch_binding *t = &p->touch[h][i];
+            if (t->action >= ACTION_COUNT) return false;
+            if (t->channel == NO_CHANNEL) continue;
+            if (h == LEFT_HAND && i >= LEFT_TOUCH_SLOTS) return false;
+            if (t->channel >= RAW_CHANNELS || t->mode > BIT_SEVEN || t->release == t->engage)
+                return false;
+            unsigned mask = field_mask(t->mode);
+            if (used[t->channel] & mask) return false;
+            used[t->channel] |= mask;
+        }
+    }
+    return true;
+}
+
+static bool migrate_profile(pad_profile *next, const uint8_t *bytes, size_t length)
+{
+    if (!((length == 35 && bytes[0] == 1) ||
+          (length == LEGACY_PROFILE_BYTES && bytes[0] == 2))) return false;
+    *next = pad_defaults();
+    next->stick_flags = bytes[1];
+    memcpy(next->binding, bytes + 2, sizeof(next->binding));
+    for (unsigned h = 0; h < HAND_COUNT; h++)
+        for (unsigned i = 0; i < 16; i++)
+            if (next->binding[h][i] > PAD_LEFT) return false;
+    if (bytes[0] == 1) {
+        // V1 stored the Right A action only. Learning its surface keeps this action.
+        next->touch[RIGHT_HAND][0].action = bytes[34];
+        return bytes[34] <= PAD_LEFT;
+    }
+
+    // One shared D-pad surface starts unbound. Retired fingers have no successor.
+    static const int8_t old_slot[HAND_COUNT][TOUCH_SLOTS] = {
+        {-1,4,5,6,7,8,-1,12,13,-1,-1,-1},
+        {0,1,2,3,4,5,6,7,8,-1,12,13}
+    };
+    for (unsigned h = 0; h < HAND_COUNT; h++) {
+        for (unsigned i = 0; i < TOUCH_SLOTS; i++) {
+            int old = old_slot[h][i];
+            if (old < 0) continue;
+            touch_binding prior;
+            memcpy(&prior, bytes + 34 + (h * 14 + old) * sizeof(prior), sizeof(prior));
+            if (prior.action > PAD_LEFT) return false;
+            touch_binding *dest = &next->touch[h][i];
+            *dest = prior;
+            // Keep the action if a saved field is invalid or overlaps an earlier slot.
+            if (!pad_profile_valid(next))
+                *dest = (touch_binding){.channel = NO_CHANNEL, .action = prior.action};
+        }
+    }
+    return true;
+}
+
+bool pad_profile_load(pad_profile *out, const uint8_t *bytes, size_t length)
+{
+    pad_profile next = {0};
+    if (length == sizeof(next) && bytes[0] == PROFILE_VERSION) {
+        memcpy(&next, bytes, length);
+    } else if (length == V3_PROFILE_BYTES && bytes[0] == 3) {
+        memcpy(&next, bytes, V3_PROFILE_BYTES);
+        next.version = PROFILE_VERSION;
+    } else if (!migrate_profile(&next, bytes, length)) return false;
+    if (!pad_profile_valid(&next)) return false;
+    *out = next;
+    return true;
+}
+
+static bool control_active(unsigned value, unsigned release, unsigned engage, bool was_active)
+{
+    if (engage > release) return value >= engage || (was_active && value > release);
+    return value <= engage || (was_active && value < release);
+}
+
+void pad_update_travel(hand_state *state, const press_binding bindings[TRAVEL_SLOTS])
+{
+    for (unsigned i = 0; i < TRAVEL_SLOTS; ++i) {
+        const press_binding *b = &bindings[i];
+        unsigned flag = 1U << i;
+        if (b->channel && (state->seen & 2) &&
+            control_active(state->raw[13 + b->channel], b->release, b->engage, state->pressed_travel & flag))
+            state->pressed_travel |= flag;
+        else state->pressed_travel &= ~flag;
+    }
+}
+
+int pad_touch_level(const hand_state *state, const touch_binding *binding)
+{
+    if (binding->channel >= RAW_CHANNELS || binding->mode > BIT_SEVEN ||
+        !(state->seen & (binding->channel < CONTACT_BYTES ? 1 : 2))) return -1;
+    unsigned value = state->raw[binding->channel];
+    if (binding->mode == LOW_NIBBLE) return (value & 15) * 17;
+    if (binding->mode == HIGH_NIBBLE) return (value >> 4) * 17;
+    if (binding->mode >= BIT_ZERO) return (value & field_mask(binding->mode)) ? 255 : 0;
+    return value;
+}
+
+void pad_update_touch(hand_state *state, const touch_binding bindings[TOUCH_SLOTS])
+{
+    for (unsigned i = 0; i < TOUCH_SLOTS; i++) {
+        const touch_binding *t = &bindings[i];
+        unsigned flag = 1U << i;
+        int value = pad_touch_level(state, t);
+        if (value < 0) {
+            state->active &= ~flag;
+            continue;
+        }
+        if (control_active(value, t->release, t->engage, state->active & flag)) state->active |= flag;
+        else state->active &= ~flag;
+    }
+}
+
+bool pad_decode(hand_state *state, const uint8_t *bytes, size_t length)
+{
+    hand_state next = *state;
+    for (size_t i = 0; i < length;) {
+        if (length - i < 2) return false;
+        uint8_t tag = bytes[i++], n = bytes[i++];
+        if (n > length - i) return false;
+        const uint8_t *p = &bytes[i];
+        if (tag == 0x14) {
+            if (n != 8) return false;
+            next.raw[14] = p[6];
+            next.raw[15] = p[7];
+            next.raw[16] = p[0];
+            next.raw[17] = p[1];
+            next.seen |= 2;
+            next.buttons = u16le(p);
+            next.x = (int16_t)u16le(p + 2);
+            next.y = (int16_t)u16le(p + 4);
+        } else if (tag == 0x19) {
+            if (n != 14) return false;
+            memcpy(next.raw, p, CONTACT_BYTES);
+            next.seen |= 1;
+        }
+        i += n;
+    }
+    if (state->seen != next.seen || memcmp(state->raw, next.raw, sizeof(next.raw)))
+        ++next.revision;
+    *state = next;
+    return true;
+}
+
+static uint8_t touch_trigger_level(const hand_state hands[HAND_COUNT], const pad_profile *profile,
+                                   unsigned source)
+{
+    if (!source) return 0;
+    unsigned index = source - 1;
+    const hand_state *state = &hands[index / TOUCH_SLOTS];
+    const touch_binding *binding = &profile->touch[index / TOUCH_SLOTS][index % TOUCH_SLOTS];
+    int value = pad_touch_level(state, binding);
+    if (value < 0) return 0;
+
+    int progress = value - binding->release;
+    int range = binding->engage - binding->release;
+    if (range < 0) {
+        progress = -progress;
+        range = -range;
+    }
+    if (progress <= 0) return 0;
+    if (progress >= range) return 255;
+    return (uint8_t)((progress * 255 + range / 2) / range);
+}
+
+pad_report pad_compose(const hand_state hands[HAND_COUNT], const pad_profile *p)
+{
+    pad_report report = {0};
+    uint32_t actions = 0;
+    for (unsigned h = 0; h < HAND_COUNT; h++) {
+        unsigned bits = hands[h].buttons;
+        while (bits) {
+            unsigned bit = __builtin_ctz(bits);
+            unsigned action = p->binding[h][bit];
+            if (action) actions |= 1U << (action - 1);
+            bits &= bits - 1;
+        }
+        static const uint8_t travel_actions[HAND_COUNT][TRAVEL_SLOTS] = {
+            {PAD_LT, PAD_L_GRAB, PAD_L_GRAB_FULL}, {PAD_RT, PAD_R_GRAB, PAD_R_GRAB_FULL}
+        };
+        unsigned travel = hands[h].pressed_travel;
+        while (travel) {
+            unsigned slot = __builtin_ctz(travel);
+            actions |= 1U << (travel_actions[h][slot] - 1);
+            travel &= travel - 1;
+        }
+        unsigned touches = hands[h].active;
+        while (touches) {
+            unsigned slot = __builtin_ctz(touches);
+            unsigned action = p->touch[h][slot].action;
+            if (action) actions |= 1U << (action - 1);
+            touches &= touches - 1;
+        }
+        if (p->stick_flags & (1U << h)) {
+            uint8_t *axis = &report.bytes[3 + 4*h];
+            uint16_t x = (uint16_t)hands[h].x, y = (uint16_t)hands[h].y;
+            axis[0] = (uint8_t)x; axis[1] = (uint8_t)(x >> 8);
+            axis[2] = (uint8_t)y; axis[3] = (uint8_t)(y >> 8);
+        }
+    }
+    // Actions 12..15 drive the hat. New USB buttons follow button 11.
+    uint32_t buttons = (actions & 0x7ffU) | ((actions >> (PAD_LT-1)) << 11);
+    report.bytes[0] = (uint8_t)buttons;
+    report.bytes[1] = (uint8_t)(buttons >> 8);
+    report.bytes[11] = (uint8_t)(buttons >> 16);
+    for (unsigned trigger = 0; trigger < 2; ++trigger) {
+        const uint32_t press = 1U << (PAD_LT - 1 + trigger);
+        report.trigger_level[trigger] = (actions & press) ? 255 :
+            touch_trigger_level(hands, p, p->trigger_source[trigger]);
+    }
+    // Opposite directions cancel. Index rows are up/neutral/down; columns left/neutral/right.
+    int dx = !!(actions & (1U << (PAD_RIGHT-1))) - !!(actions & (1U << (PAD_LEFT-1)));
+    int dy = !!(actions & (1U << (PAD_DOWN-1))) - !!(actions & (1U << (PAD_UP-1)));
+    static const uint8_t hats[3][3] = {{7,0,1},{6,8,2},{5,4,3}};
+    report.bytes[2] = hats[dy+1][dx+1];
+    return report;
+}
+
+unsigned pad_usb_buttons(const pad_report *report)
+{
+    return report->bytes[0] | (report->bytes[1] << 8) | (report->bytes[11] << 16);
+}
+
+// TinyUSB's standard gamepad uses signed 8-bit X, Y, Z, Rz, Rx and Ry,
+// followed by its one-based hat and a contiguous 32-bit button bitmap.
+size_t pad_standard_report(const pad_report *r, uint8_t out[11])
+{
+    for (unsigned i = 0; i < 4; ++i) {
+        int32_t axis = (int16_t)u16le(&r->bytes[3 + i * 2]);
+        out[i] = (uint8_t)((axis * 127) / (axis < 0 ? 32768 : 32767));
+    }
+    out[4] = out[5] = 0;
+    out[6] = r->bytes[2] < 8 ? r->bytes[2] + 1 : 0;
+    out[7] = r->bytes[0];
+    out[8] = r->bytes[1];
+    out[9] = r->bytes[11];
+    out[10] = 0;
+    return 11;
+}

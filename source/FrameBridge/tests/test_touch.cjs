@@ -1,0 +1,44 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const Touch = vm.runInNewContext(fs.readFileSync(__dirname+'/../app/touch.js','utf8')+'\nTouch;');
+const defaults = new Uint8Array(Touch.size);
+defaults[0]=4;
+for(let i=34;i<154;i+=5) defaults[i]=Touch.empty;
+function capture(make, seen=3) {
+  return Array.from({length:5},(_,phase)=>Array.from({length:5},(_,sample)=>{
+    const raw=Array(18).fill(0);
+    make(raw,phase%2,sample,phase);
+    return {raw,seen};
+  }));
+}
+const analog=capture((raw,on,i)=>{raw[4]=(on?172:25)+i*2;});
+let best=Touch.learn(analog,1,1,defaults);
+assert.equal(best.channel,4);
+assert.ok(best.engage>best.release);
+assert.equal(best.mode,0);
+const decreasing=capture((raw,on,i)=>{raw[3]=(on?12:208)+i;});
+best=Touch.learn(decreasing,0,5,defaults);
+assert.equal(best.channel,3);
+assert.ok(best.engage<best.release);
+const bits=capture((raw,on)=>{raw[3]=on?132:128;});
+best=Touch.learn(bits,0,7,defaults);
+assert.equal(best.mode,5);
+const p=defaults.slice();
+p.set([3,5,50,150,0],Touch.offset(0,7));
+assert.match(Touch.learn(bits,0,8,p).error,/already assigned/);
+const adjacent=capture((raw,on)=>{raw[3]=on?132:4;});
+assert.equal(Touch.learn(adjacent,0,8,p).mode,10);
+const packed=capture((raw,on,i)=>{raw[2]=0xa0+(on?9:1)+i%2;});
+assert.equal(Touch.learn(packed,1,1,p).mode,1);
+const same=capture((r,on)=>{r[2]=r[4]=on?200:20;});
+assert.match(Touch.learn(same,0,7,p).error,/Multiple/);
+assert.match(Touch.learn(capture((r,on,i,phase)=>{r[6]=phase===1?150:30;}),0,1,p).error,/No repeatable/);
+assert.match(Touch.learn(capture((r,on)=>{r[16]=on?1:0;}),1,0,p).error,/No repeatable/);
+assert.match(Touch.learn(capture((r,on)=>{r[0]=on?180:10;},2),0,1,p).error,/No repeatable/);
+assert.equal(Touch.learn(analog,0,1,p).channel,4);
+assert.equal(Touch.slots[0].length,9);
+assert.equal(Touch.slots[1].length,12);
+assert.ok(Touch.latch(120,0,100,150,true));
+assert.ok(!Touch.latch(100,0,100,150,true));
+console.log('Touch learner passed both polarities, ambiguity, click filtering, missing fields, packed and independent fingers.');

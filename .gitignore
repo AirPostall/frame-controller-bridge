@@ -1,0 +1,13 @@
+.DS_Store
+._*
+.vscode/
+__pycache__/
+*.pyc
+.venv/
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
+sdkconfig.*.old
+frame_bridge-paired*.bin
+FrameBridge-bindings*.json

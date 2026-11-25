@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#142220"><title>Frame Bridge</title><link rel="stylesheet" href="/style.css"><script defer src="/touch.js"></script><script defer src="/backup.js"></script><script defer src="/ui.js"></script></head>
+<body><header><div class="brand"><span class="mark" aria-hidden="true">⌁</span> Frame Bridge</div><div id="network" role="status">Connecting to board…</div></header>
+<main><nav aria-label="Views"><button id="live-tab" aria-pressed="true" aria-controls="live">Live inputs</button><button id="map-tab" aria-pressed="false" aria-controls="mapping">Bindings</button><button id="sensors-tab" aria-pressed="false" aria-controls="sensors">Touch</button></nav>
+<section id="live"><div class="title"><h1>Controller inputs</h1><span id="usb" class="pill">USB · waiting</span></div>
+<div class="hands">
+<article><div class="hand-title"><h2>Left hand</h2><span id="left-link">Waiting</span></div><div class="input-line"><span>Button bits</span><code id="left-mask">—</code></div><div class="input-line"><span>Packets</span><span id="left-count">—</span></div><div class="input-line"><span>Raw stick X / Y</span><code id="left-xy">—</code></div></article>
+<article><div class="hand-title"><h2>Right hand</h2><span id="right-link">Waiting</span></div><div class="input-line"><span>Button bits</span><code id="right-mask">—</code></div><div class="input-line"><span>Packets</span><span id="right-count">—</span></div><div class="input-line"><span>Raw stick X / Y</span><code id="right-xy">—</code></div><div class="input-line"><label for="touch">A contact</label><div class="meter"><meter id="touch" min="0" max="255" value="0"></meter><span id="touch-text">—</span></div></div></article></div>
+<article class="wide"><div class="hand-title"><h2>Gamepad output</h2><span>USB HID</span></div><h3>USB host check</h3><p id="host-check" role="status">Waiting for board</p><p id="output">Waiting for board</p><p id="trigger-levels" hidden></p><p id="diagnostic" hidden></p></article>
+<p class="hint">Setup Wi-Fi closes after 30 minutes. Tap BOOT to close it sooner. Keep the USB data cable connected.</p></section>
+<section id="mapping" hidden><div class="title"><h1>Input bindings</h1><span id="dirty" class="pill">On board</span></div>
+<p class="intro">Choose Learn, then press and hold the physical button. For a full grab click, hold the first stage before choosing Learn, then squeeze through the second stage.</p>
+<article class="wide"><h2>Binding backups</h2><p>Export the bindings shown here, including unsaved edits. Imported settings take effect when you choose Save to board.</p>
+<div class="actions"><button id="export" disabled>Export JSON</button><button id="import" disabled>Import JSON</button><input id="backup-file" type="file" accept=".json,application/json" hidden></div></article>
+<div id="bindings" class="bindings"></div>
+<article id="analog-routing" class="wide" hidden><h2>Analog trigger sources</h2>
+<p>Choose a calibrated touch surface to vary a Pro 3 trigger from 0 to 255. In Touch, set Release at for zero output and Engage at for full output. A bound digital trigger press always gives full output.</p>
+<div class="choices"><label>Left trigger <select id="lt-source"></select></label><label>Right trigger <select id="rt-source"></select></label></div></article>
+<article class="wide"><h2>Experimental sticks</h2><p>Enable each stick only after checking both axes and their direction in Live inputs or your game.</p><div class="choices"><label><input id="stick-left" type="checkbox"> Left stick</label><label><input id="stick-right" type="checkbox"> Right stick</label></div></article>
+</section>
+<section id="sensors" hidden>
+<div class="title"><h1>Touch calibration</h1></div>
+<p class="intro">Choose a surface or grip finger. During learning, keep the controller steady and touch the selected control lightly without clicking it.</p>
+<article class="wide"><div class="choices sensor-select"><label>Hand <select id="sensor-hand"><option value="1">Right</option><option value="0">Left</option></select></label><label>Control <select id="sensor-slot"></select></label></div>
+<p id="sensor-source"></p><p id="dpad-hint" hidden>Touching the center counts as one D-pad contact. The four directions have separate click bindings.</p>
+<div class="input-line"><span>Contact level</span><div class="meter"><meter id="sensor-meter" min="0" max="255" value="0"></meter><span id="sensor-value">—</span></div></div>
+<div class="actions"><button id="sensor-learn">Learn touch</button><button id="sensor-clear">Clear calibration</button></div>
+<div id="wizard" hidden><p id="wizard-prompt" role="status"></p><div class="actions"><button id="capture" class="primary">Capture</button><button id="stop-capture">Cancel</button></div></div>
+<p id="sensor-note" role="status"></p>
+<div id="candidates" hidden><label>Candidate signal <select id="candidate-list"></select></label><p id="candidate-value"></p><button id="use-candidate">Use this signal</button></div>
+<div class="choices"><label>Engage at <input type="number" id="engage" min="0" max="255" step="1"></label><label>Release at <input type="number" id="release" min="0" max="255" step="1"></label><label>Gamepad output <select id="sensor-action"></select></label></div></article>
+<article class="wide"><h2>Live touches</h2><p id="touch-left"></p><p id="touch-right"></p></article>
+</section>
+<div id="editor" hidden><div id="pull-tools" hidden><button id="pull-capture">Capture held travel</button><select id="pull-channel" aria-label="Press travel field" hidden></select><button id="pull-confirm" hidden>Confirm release</button></div><div class="actions"><button id="save" class="primary" disabled>Save to board</button><button id="defaults">Restore defaults</button><button id="cancel" hidden>Cancel learn</button></div><p id="message" role="status"></p></div>
+</main></body></html>

@@ -1,0 +1,22 @@
+cmake_minimum_required(VERSION 3.22)
+set(PROJECT_VER "4.0.0")
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(frame_bridge)
+
+# ESP-IDF maps its own tree and the project directory. The shared BLE source is
+# a sibling of the project, and local component overrides can live anywhere.
+get_filename_component(shared_main "${CMAKE_CURRENT_SOURCE_DIR}/../main" ABSOLUTE)
+idf_build_set_property(COMPILE_OPTIONS "-ffile-prefix-map=${shared_main}=/FRAME_SOURCE/main" APPEND)
+idf_build_get_property(components BUILD_COMPONENTS)
+foreach(component IN LISTS components)
+    idf_component_get_property(origin "${component}" COMPONENT_SOURCE)
+    if(origin STREQUAL "project_extra_components")
+        idf_component_get_property(component_dir "${component}" COMPONENT_DIR)
+        file(REAL_PATH "${component_dir}" resolved_dir)
+        set(component_paths "${component_dir}" "${resolved_dir}")
+        list(REMOVE_DUPLICATES component_paths)
+        foreach(path IN LISTS component_paths)
+            idf_build_set_property(COMPILE_OPTIONS "-ffile-prefix-map=${path}=/FRAME_COMPONENTS/${component}" APPEND)
+        endforeach()
+    endif()
+endforeach()
