@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#142220"><title>Frame Bridge</title><link rel="stylesheet" href="/style.css"><script defer src="/touch.js"></script><script defer src="/backup.js"></script><script defer src="/ui.js"></script></head>
 <body><header><div class="brand"><span class="mark" aria-hidden="true">⌁</span> Frame Bridge</div><div id="network" role="status">Connecting to board…</div></header>
-<main><nav aria-label="Views"><button id="live-tab" aria-pressed="true" aria-controls="live">Live inputs</button><button id="map-tab" aria-pressed="false" aria-controls="mapping">Bindings</button><button id="sensors-tab" aria-pressed="false" aria-controls="sensors">Touch</button></nav>
+<main><nav aria-label="Views"><button id="live-tab" aria-pressed="true" aria-controls="live">Live inputs</button><button id="map-tab" aria-pressed="false" aria-controls="mapping">Bindings</button><button id="sensors-tab" aria-pressed="false" aria-controls="sensors">Touch</button><button id="joysticks-tab" aria-pressed="false" aria-controls="joysticks">Joysticks</button></nav>
 <section id="live"><div class="title"><h1>Controller inputs</h1><span id="output-hosts" class="pill">Waiting for board</span></div>
 <article id="bound-inputs" class="wide" aria-labelledby="bound-title"><h2 id="bound-title">Saved input bindings</h2>
 <div class="live-groups">
@@ -59,7 +59,6 @@
 <article id="analog-routing" class="wide" hidden><h2>Analog trigger sources</h2>
 <p>Choose a calibrated touch surface to vary a trigger from 0 to 255 over Bluetooth or wired Pro 3 USB. In Touch, set Release at for zero output and Engage at for full output. A bound digital trigger press always gives full output.</p>
 <div class="choices"><label>Left trigger <select id="lt-source"></select></label><label>Right trigger <select id="rt-source"></select></label></div></article>
-<article class="wide"><h2>Experimental sticks</h2><p>Enable each stick only after checking both axes and their direction in Live inputs or your game.</p><div class="choices"><label><input id="stick-left" type="checkbox"> Left stick</label><label><input id="stick-right" type="checkbox"> Right stick</label></div></article>
 <article class="wide"><h2>Binding backups</h2><p>Export the bindings shown here, including unsaved edits. Imported settings take effect when you choose Save to board.</p>
 <div class="actions"><button id="export" disabled>Export JSON</button><button id="import" disabled>Import JSON</button><input id="backup-file" type="file" accept=".json,application/json" hidden></div></article>
 </section>
@@ -80,5 +79,33 @@
 <div id="candidates" hidden><label>Candidate signal <select id="candidate-list"></select></label><p id="candidate-value"></p><button id="use-candidate">Use this signal</button></div>
 <div class="choices"><label>Engage at <input type="number" id="engage" min="0" max="255" step="1"></label><label>Release at <input type="number" id="release" min="0" max="255" step="1"></label><label>Gamepad output <select id="sensor-action"></select></label></div></article>
 </section>
+<section id="joysticks" hidden><div class="title"><h1>Joysticks</h1><span id="stick-dirty" class="pill">On board</span></div>
+<p class="intro">Move each stick to preview your settings before saving. Deadzone ignores movement near the center of each axis. Sensitivity scales the remaining travel.</p>
+<div class="hands">
+<fieldset class="stick-card"><legend>Left joystick</legend>
+<label><input id="stick-left" type="checkbox" disabled> Enable output</label>
+<div class="stick-preview">
+  <div class="stick-plot" aria-hidden="true"><span class="stick-raw-dot" id="stick-left-raw-dot" hidden></span><span class="stick-output-dot" id="stick-left-output-dot" hidden></span></div>
+  <div class="stick-readings"><span class="stick-key raw-key">Raw X / Y</span><code id="stick-left-raw">—</code><span class="stick-key output-key">Preview X / Y</span><code id="stick-left-output">—</code></div>
+</div>
+<p class="hint stick-status" id="stick-left-status">Waiting for board</p>
+<div class="stick-slider"><label for="stick-left-deadzone">Deadzone</label><span id="stick-left-deadzone-value">0%</span><input type="range" min="0" max="50" value="0" step="1" id="stick-left-deadzone" disabled></div>
+<div class="stick-slider"><label for="stick-left-sensitivity">Sensitivity</label><span id="stick-left-sensitivity-value">100%</span><input type="range" min="25" max="200" value="100" step="1" id="stick-left-sensitivity" disabled></div>
+<div class="choices"><label><input id="stick-left-invert-x" type="checkbox" disabled> Invert X</label><label><input id="stick-left-invert-y" type="checkbox" disabled> Invert Y</label></div>
+<button id="stick-left-revert" type="button" disabled>Revert this stick</button>
+</fieldset>
+<fieldset class="stick-card"><legend>Right joystick</legend>
+<label><input id="stick-right" type="checkbox" disabled> Enable output</label>
+<div class="stick-preview">
+  <div class="stick-plot" aria-hidden="true"><span class="stick-raw-dot" id="stick-right-raw-dot" hidden></span><span class="stick-output-dot" id="stick-right-output-dot" hidden></span></div>
+  <div class="stick-readings"><span class="stick-key raw-key">Raw X / Y</span><code id="stick-right-raw">—</code><span class="stick-key output-key">Preview X / Y</span><code id="stick-right-output">—</code></div>
+</div>
+<p class="hint stick-status" id="stick-right-status">Waiting for board</p>
+<div class="stick-slider"><label for="stick-right-deadzone">Deadzone</label><span id="stick-right-deadzone-value">0%</span><input type="range" min="0" max="50" value="0" step="1" id="stick-right-deadzone" disabled></div>
+<div class="stick-slider"><label for="stick-right-sensitivity">Sensitivity</label><span id="stick-right-sensitivity-value">100%</span><input type="range" min="25" max="200" value="100" step="1" id="stick-right-sensitivity" disabled></div>
+<div class="choices"><label><input id="stick-right-invert-x" type="checkbox" disabled> Invert X</label><label><input id="stick-right-invert-y" type="checkbox" disabled> Invert Y</label></div>
+<button id="stick-right-revert" type="button" disabled>Revert this stick</button>
+</fieldset>
+</div></section>
 <div id="editor" hidden><div class="actions"><button id="save" class="primary" disabled>Save to board</button><button id="defaults">Restore defaults</button></div><p id="message" role="status"></p></div>
 </main></body></html>

@@ -58,7 +58,7 @@ To make a backup first, open the current setup page and choose **Bindings → Ex
 python -m esptool --chip esp32s3 --port PORT write-flash 0x10000 frame_bridge-paired.bin
 ```
 
-Version 5.2 uses existing V5 profiles and loads saved V3 and V4 profiles, including learned travel thresholds, touch calibrations, and any V4 analog trigger sources. Saving writes a separate V5 settings entry. V3 and V4 JSON backups can also be imported. The new defaults apply to fresh profiles and to **Restore defaults**.
+Firmware 5.3 loads existing bindings, touch calibrations, trigger sources and stick enable settings. Profiles and JSON backups from V3 through V5 gain the default joystick settings on import. The first save writes a V6 profile in a separate settings entry, so the previous firmware can still read its earlier profile.
 
 After either procedure, wait for esptool to finish verifying the image. Tap RESET if the board stays in downloader mode. For wired gameplay connect the board’s **native USB/OTG data port** to the host. For wireless gameplay either USB connector can supply power on boards that support it. On boards with separate USB and UART connectors, the UART connector is for programming and serial access.
 
@@ -97,7 +97,15 @@ To edit from the other direction, open **Edit by Steam Frame button**, select a 
 
 For a trigger or grab, start travel calibration at rest, squeeze to the desired position, choose **Capture held travel**, release, and choose **Confirm release**. For a full grab click, start with the first stage already held. The trigger settings also let you select report byte 6 or 7 and set separate activation and release levels from 0 to 255 for each hand. Watch both live bytes while squeezing and releasing to identify the channel and direction. Choose **Apply values** after editing the thresholds. If the bit 7 click also drives that trigger, choose **Use travel for L2** or **Use travel for R2**, then **Save to board**.
 
-Stick axes are experimental and start disabled. **Live inputs** shows the raw X and Y readings from each controller. Enable the sticks you want under **Bindings**. From firmware 4.0.1, all three USB layouts invert each stick’s Y reading when sending it to the game.
+## Customize the joysticks
+
+Open **Joysticks** on the board setup page. Enable the left or right stick and move it to compare the raw reading with the preview of your settings. Edits take effect in the game when you choose **Save to board**. The settings apply to both USB and Bluetooth.
+
+- **Deadzone (0–50%)** ignores small movements near the center of each axis. If a stick drifts at rest, raise the deadzone just enough for the preview to stay centered.
+- **Sensitivity (25–200%)** scales movement outside the deadzone. Below 100%, a full physical push produces less than full game input. Above 100%, the game reaches full input earlier.
+- **Invert X** reverses horizontal movement. **Invert Y** reverses vertical movement. Each direction can be set independently for each stick.
+
+Fresh profiles start with both sticks disabled, a 0% deadzone, 100% sensitivity and only Y inverted. An upgrade keeps each stick’s previous enable setting and direction.
 
 ## Calibrate touch and sensitivity
 

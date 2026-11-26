@@ -3,7 +3,8 @@
 
 _Static_assert(offsetof(pad_profile, trigger_source) == V3_PROFILE_BYTES, "v3 profile prefix");
 _Static_assert(offsetof(pad_profile, outputs) == V4_PROFILE_BYTES, "v4 profile prefix");
-_Static_assert(offsetof(pad_profile, names) == 288 && sizeof(pad_profile) == 1728, "v5 profile wire layout");
+_Static_assert(offsetof(pad_profile, names) == 288 && offsetof(pad_profile, sticks) == V5_PROFILE_BYTES, "v5 profile prefix");
+_Static_assert(sizeof(stick_settings) == 3 && sizeof(pad_profile) == 1734, "v6 profile wire layout");
 _Static_assert(sizeof(pad_report) == 14, "packed report state");
 
 static uint16_t u16le(const uint8_t *p) { return p[0] | ((uint16_t)p[1] << 8); }
@@ -18,10 +19,17 @@ static uint32_t output_mask(const uint8_t outputs[3])
     return outputs[0] | ((uint32_t)outputs[1] << 8) | ((uint32_t)outputs[2] << 16);
 }
 
+static void default_sticks(pad_profile *p)
+{
+    for (unsigned h = 0; h < HAND_COUNT; ++h)
+        p->sticks[h] = (stick_settings){.flags = STICK_INVERT_Y, .sensitivity = 100};
+}
+
 static void empty_profile(pad_profile *p)
 {
     memset(p, 0, sizeof(*p));
     p->version = PROFILE_VERSION;
+    default_sticks(p);
     for (unsigned h = 0; h < HAND_COUNT; ++h)
         for (unsigned i = 0; i < TOUCH_SLOTS; ++i)
             p->touch[h][i].channel = NO_CHANNEL;
@@ -84,6 +92,9 @@ bool pad_profile_valid(const pad_profile *p)
     for (unsigned i = 0; i < NAME_SLOTS; ++i)
         if (!valid_name(p->names[i])) return false;
     for (unsigned h = 0; h < HAND_COUNT; h++) {
+        const stick_settings *stick = &p->sticks[h];
+        if ((stick->flags & ~(STICK_INVERT_X | STICK_INVERT_Y)) ||
+            stick->deadzone > 50 || stick->sensitivity < 25 || stick->sensitivity > 200) return false;
         unsigned source = p->trigger_source[h];
         if (source) {
             unsigned index = source - 1;
@@ -170,6 +181,10 @@ bool pad_profile_load(pad_profile *out, const uint8_t *bytes, size_t length)
     pad_profile next;
     if (length == sizeof(next) && bytes[0] == PROFILE_VERSION) {
         memcpy(&next, bytes, length);
+    } else if (length == V5_PROFILE_BYTES && bytes[0] == 5) {
+        memcpy(&next, bytes, length);
+        next.version = PROFILE_VERSION;
+        default_sticks(&next);
     } else if (!migrate_profile(&next, bytes, length)) return false;
     if (!pad_profile_valid(&next)) return false;
     *out = next;
@@ -272,13 +287,25 @@ static uint8_t touch_trigger_level(const hand_state hands[HAND_COUNT], const pad
     return (uint8_t)((progress * 255 + range / 2) / range);
 }
 
-static int16_t inverted_stick_y(int16_t y)
+static int16_t stick_axis(int16_t raw, const stick_settings *settings, unsigned invert_flag)
 {
-    // The signed 16-bit range has one extra negative value. Swap both end stops
-    // explicitly so each USB layout can still report full travel in both directions.
-    if (y == INT16_MIN) return INT16_MAX;
-    if (y == INT16_MAX) return INT16_MIN;
-    return -y;
+    int32_t value = raw;
+    if (settings->deadzone || settings->sensitivity != 100) {
+        int32_t limit = raw < 0 ? 32768 : 32767;
+        int32_t magnitude = raw < 0 ? -value : value;
+        int32_t threshold = limit * settings->deadzone / 100;
+        if (magnitude <= threshold) return 0;
+        int32_t range = limit - threshold;
+        magnitude = ((magnitude - threshold) * limit + range / 2) / range;
+        magnitude = (magnitude * settings->sensitivity + 50) / 100;
+        if (magnitude > limit) magnitude = limit;
+        value = raw < 0 ? -magnitude : magnitude;
+    }
+    if (!(settings->flags & invert_flag)) return (int16_t)value;
+    // Swapping both end stops retains the full signed range when inverting.
+    if (value == INT16_MIN) return INT16_MAX;
+    if (value == INT16_MAX) return INT16_MIN;
+    return (int16_t)-value;
 }
 
 pad_report pad_compose(const hand_state hands[HAND_COUNT], const pad_profile *p)
@@ -307,8 +334,8 @@ pad_report pad_compose(const hand_state hands[HAND_COUNT], const pad_profile *p)
         }
         if (p->stick_flags & (1U << h)) {
             uint8_t *axis = &report.bytes[3 + 4*h];
-            uint16_t x = (uint16_t)hands[h].x;
-            uint16_t y = (uint16_t)inverted_stick_y(hands[h].y);
+            uint16_t x = (uint16_t)stick_axis(hands[h].x, &p->sticks[h], STICK_INVERT_X);
+            uint16_t y = (uint16_t)stick_axis(hands[h].y, &p->sticks[h], STICK_INVERT_Y);
             axis[0] = (uint8_t)x; axis[1] = (uint8_t)(x >> 8);
             axis[2] = (uint8_t)y; axis[3] = (uint8_t)(y >> 8);
         }

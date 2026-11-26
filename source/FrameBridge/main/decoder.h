@@ -10,7 +10,8 @@ enum { UNBOUND, PAD_A, PAD_B, PAD_X, PAD_Y, PAD_LB, PAD_RB, PAD_SELECT, PAD_STAR
 enum { CONTACT_BYTES = 14, RAW_CHANNELS = 18, TOUCH_SLOTS = 12, LEFT_TOUCH_SLOTS = 9, NO_CHANNEL = 255,
        TRAVEL_SLOTS = 3, LEGACY_PROFILE_BYTES = 174, V3_PROFILE_BYTES = 172, V4_PROFILE_BYTES = 174,
        CLICK_SOURCES = HAND_COUNT * 16, PRESS_SOURCES = CLICK_SOURCES + HAND_COUNT * TRAVEL_SLOTS,
-       NAME_SLOTS = PRESS_SOURCES + ACTION_COUNT - 1, NAME_BYTES = 24, PROFILE_VERSION = 5 };
+       NAME_SLOTS = PRESS_SOURCES + ACTION_COUNT - 1, NAME_BYTES = 24,
+       V5_PROFILE_BYTES = 1728, PROFILE_VERSION = 6 };
 enum { WHOLE_BYTE, LOW_NIBBLE, HIGH_NIBBLE, BIT_ZERO, BIT_SEVEN = BIT_ZERO + 7 };
 
 typedef struct {
@@ -29,6 +30,10 @@ typedef struct {
 // channel 0 disables travel. Channels 1 and 2 read press-report bytes 6 and 7.
 typedef struct { uint8_t channel, release, engage; } press_binding;
 
+enum { STICK_INVERT_X = 1, STICK_INVERT_Y = 2 };
+// Deadzone and sensitivity are whole percentages, applied independently to each axis.
+typedef struct { uint8_t flags, deadzone, sensitivity; } stick_settings;
+
 typedef struct {
     uint8_t version, stick_flags;
     uint8_t reserved[CLICK_SOURCES]; // V1–V4 stored one action per click here.
@@ -40,6 +45,7 @@ typedef struct {
     uint8_t outputs[PRESS_SOURCES][3];
     // UTF-8, NUL-terminated and padded. Press source aliases precede output aliases A..R4.
     uint8_t names[NAME_SLOTS][NAME_BYTES];
+    stick_settings sticks[HAND_COUNT];
 } pad_profile;
 
 typedef struct {

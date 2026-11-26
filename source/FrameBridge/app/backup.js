@@ -7,12 +7,40 @@ const BindingBackup = (() => {
   const allOutputs = (1 << actionCount) - 1;
   const handNames = ['left', 'right'];
   const legacyTravel = [16, 18, 21, 17, 19, 22];
-  const size = version => version === 3 ? 172 : version === 4 ? 174 : version === 5 ? 1728 : 0;
+  const stickOffset = 1728, stickBytes = 3;
+  const defaultStick = {invertX:false, invertY:true, deadzone:0, sensitivity:100};
+  const profileSizes = [172, 174, stickOffset, stickOffset + 2 * stickBytes];
+  const size = version => Number.isInteger(version) ? (profileSizes[version - 3] || 0) : 0;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder('utf-8', {fatal:true, ignoreBOM:true});
 
   function bounded(value, max) {
     return Number.isInteger(value) && value >= 0 && value <= max;
+  }
+  function stickStart(profile, side) {
+    if (profile[0] !== 6 || profile.length !== size(6)) throw Error('Joystick tuning requires a V6 profile.');
+    if (!bounded(side, 1)) throw Error('Invalid joystick side.');
+    return stickOffset + side * stickBytes;
+  }
+  function checkStick(settings) {
+    if (typeof settings?.invertX !== 'boolean' || typeof settings.invertY !== 'boolean' ||
+        !bounded(settings.deadzone, 50) || !bounded(settings.sensitivity, 200) || settings.sensitivity < 25)
+      throw Error('Invalid joystick settings.');
+  }
+  function stick(profile, side) {
+    const start = stickStart(profile, side);
+    const flags = profile[start];
+    if (flags > 3) throw Error('Invalid joystick axis flags.');
+    const settings = {invertX:!!(flags & 1), invertY:!!(flags & 2),
+      deadzone:profile[start + 1], sensitivity:profile[start + 2]};
+    checkStick(settings);
+    return settings;
+  }
+  function setStick(profile, side, settings) {
+    const start = stickStart(profile, side);
+    checkStick(settings);
+    const flags = Number(settings.invertX) | (Number(settings.invertY) << 1);
+    profile.set([flags, settings.deadzone, settings.sensitivity], start);
   }
   function checkSource(source) {
     if (!bounded(source, sourceCount - 1)) throw Error('Invalid press source.');
@@ -29,7 +57,7 @@ const BindingBackup = (() => {
   }
   function setMask(profile, source, value) {
     checkSource(source);
-    if (profile[0] !== 5 || !bounded(value, allOutputs)) throw Error('Invalid button output mask.');
+    if ((profile[0] !== 5 && profile[0] !== 6) || !bounded(value, allOutputs)) throw Error('Invalid button output mask.');
     const offset = maskOffset + 3 * source;
     profile.set([value & 255, (value >>> 8) & 255, value >>> 16], offset);
   }
@@ -55,7 +83,7 @@ const BindingBackup = (() => {
   }
   function setName(profile, index, value) {
     const start = nameStart(index);
-    if (profile[0] !== 5) throw Error('Button names require profile version 5.');
+    if (profile[0] !== 5 && profile[0] !== 6) throw Error('Button names require a V5 or V6 profile.');
     checkName(value);
     const bytes = encoder.encode(value);
     if (bytes.length >= nameBytes) throw Error('Button names can use up to 23 UTF-8 bytes.');
@@ -96,7 +124,7 @@ const BindingBackup = (() => {
     const version = profile[0];
     if (!size(version) || size(version) !== profile.length) throw Error('Unsupported binding profile.');
     if (profile[1] > 3) throw Error('Invalid stick settings.');
-    if (profile.subarray(2, 34).some(v => v > (version === 5 ? 0 : actionCount)))
+    if (profile.subarray(2, 34).some(v => v > (version >= 5 ? 0 : actionCount)))
       throw Error('Invalid click binding.');
     for (let side = 0; side < 2; ++side) {
       const used = new Uint8Array(18);
@@ -129,7 +157,7 @@ const BindingBackup = (() => {
     function hand(side) {
       const settings = {
         stickEnabled: Boolean(profile[1] & (1 << side)),
-        buttons: version === 5 ? Array.from({length:16}, (_, i) => actionList(profile, side * 16 + i))
+        buttons: version >= 5 ? Array.from({length:16}, (_, i) => actionList(profile, side * 16 + i))
           : slice(2 + side * 16, 16),
         touch: Array.from({length:12}, (_, slot) => slice(34 + (side * 12 + slot) * 5, 5)),
         travel: Array.from({length:3}, (_, slot) => slice(154 + (side * 3 + slot) * 3, 3)),
@@ -138,21 +166,22 @@ const BindingBackup = (() => {
         const index = profile[triggerOffset + side] - 1;
         settings.analogTriggerSource = index < 0 ? null : {hand:handNames[Math.floor(index / 12)], slot:index % 12};
       }
-      if (version === 5) {
+      if (version >= 5) {
         settings.travelOutputs = Array.from({length:3}, (_, i) => actionList(profile, 32 + side * 3 + i));
         settings.buttonNames = Array.from({length:16}, (_, i) => name(profile, side * 16 + i));
         settings.travelNames = Array.from({length:3}, (_, i) => name(profile, 32 + side * 3 + i));
       }
+      if (version === 6) settings.stick = stick(profile, side);
       return settings;
     }
     const result = {format, version:1, profileVersion:version, left:hand(0), right:hand(1)};
-    if (version === 5) result.outputNames = Array.from({length:actionCount}, (_, i) => name(profile, sourceCount + i));
+    if (version >= 5) result.outputNames = Array.from({length:actionCount}, (_, i) => name(profile, sourceCount + i));
     return result;
   }
 
-  function decode(data, targetVersion = 5) {
+  function decode(data, targetVersion = 6) {
     if (data?.format !== format || data.version !== 1 || !size(data.profileVersion) || !size(targetVersion))
-      throw Error('Choose a Frame Bridge bindings backup (profile versions 3–5).');
+      throw Error('Choose a Frame Bridge bindings backup (profile versions 3–6).');
     const version = data.profileVersion;
     if (version > targetVersion) throw Error('This backup requires V' + version + ' firmware.');
     const result = new Uint8Array(size(targetVersion));
@@ -160,6 +189,7 @@ const BindingBackup = (() => {
     [data.left, data.right].forEach((hand, side) => {
       if (typeof hand?.stickEnabled !== 'boolean') throw Error('Missing stick setting.');
       if (hand.stickEnabled) result[1] |= 1 << side;
+      if (targetVersion === 6) setStick(result, side, version === 6 ? hand.stick : defaultStick);
       array(hand.touch, 12).forEach((row, i) => result.set(bytes(row, 5), 34 + (side * 12 + i) * 5));
       array(hand.travel, 3).forEach((row, i) => result.set(bytes(row, 3), 154 + (side * 3 + i) * 3));
       if (version >= 4 && hand.analogTriggerSource !== null) {
@@ -168,7 +198,7 @@ const BindingBackup = (() => {
         if (sourceHand < 0 || !bounded(source?.slot, sourceHand ? 11 : 8)) throw Error('Invalid analog trigger touch source.');
         result[triggerOffset + side] = 1 + sourceHand * 12 + source.slot;
       }
-      if (version === 5) {
+      if (version >= 5) {
         array(hand.buttons, 16).forEach((list, i) => setMask(result, side * 16 + i, readActions(list)));
         array(hand.travelOutputs, 3).forEach((list, i) => setMask(result, 32 + side * 3 + i, readActions(list)));
         array(hand.buttonNames, 16).forEach((v, i) => setName(result, side * 16 + i, v));
@@ -176,7 +206,7 @@ const BindingBackup = (() => {
       } else {
         const buttons = bytes(hand.buttons, 16);
         if (buttons.some(v => v > actionCount)) throw Error('Invalid click binding.');
-        if (targetVersion === 5) {
+        if (targetVersion >= 5) {
           buttons.forEach((action, i) => setMask(result, side * 16 + i, action ? 1 << (action - 1) : 0));
           hand.travel.forEach(([channel], i) => {
             const slot = side * 3 + i;
@@ -185,11 +215,11 @@ const BindingBackup = (() => {
         } else result.set(buttons, 2 + side * 16);
       }
     });
-    if (version === 5) array(data.outputNames, actionCount).forEach((v, i) => setName(result, sourceCount + i, v));
+    if (version >= 5) array(data.outputNames, actionCount).forEach((v, i) => setName(result, sourceCount + i, v));
     validate(result);
     return result;
   }
 
-  return {encode, decode, mask, setMask, name, setName, size, triggerOffset};
+  return {encode, decode, mask, setMask, name, setName, stick, setStick, size, triggerOffset};
 })();
 if (typeof module !== 'undefined') module.exports = BindingBackup;

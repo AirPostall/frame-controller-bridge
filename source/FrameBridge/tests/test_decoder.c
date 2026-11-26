@@ -134,7 +134,7 @@ static void test_legacy_profile_upgrade(void)
         pad_profile destination;
         pad_defaults(&destination);
         assert(pad_profile_load(&destination, bytes, length));
-        assert(destination.version == 5 && destination.stick_flags == 3);
+        assert(destination.version == PROFILE_VERSION && destination.stick_flags == 3);
         assert(!memcmp(destination.touch, bytes + 34, 120));
         assert(!memcmp(destination.travel, bytes + 154, 18));
         assert(destination.trigger_source[0] == 0);
@@ -156,6 +156,55 @@ static void test_legacy_profile_upgrade(void)
         bytes[2] = 0;
         assert(!pad_profile_load(&destination, bytes, 0));
         assert(!pad_profile_load(&destination, (const uint8_t *)&saved, sizeof(saved) - 1));
+    }
+}
+
+static void test_stick_settings(void)
+{
+    pad_profile p;
+    pad_defaults(&p);
+    assert(!p.stick_flags);
+    assert(!memcmp(p.sticks, (uint8_t[]){2, 0, 100, 2, 0, 100}, sizeof(p.sticks)));
+
+    // Load in place as at boot, retaining every V5 field including names and bindings.
+    p.stick_flags = 3;
+    memcpy(p.names[59], "Right rear", 11);
+    bind_outputs(&p, 17, bit_for(PAD_X) | bit_for(PAD_Y));
+    p.version = 5;
+    uint8_t original[V5_PROFILE_BYTES];
+    memcpy(original, &p, sizeof(original));
+    memset(p.sticks, 255, sizeof(p.sticks));
+    assert(pad_profile_load(&p, (const uint8_t *)&p, sizeof(original)));
+    assert(!memcmp((const uint8_t *)&p + 1, original + 1, sizeof(original) - 1));
+    assert(!memcmp(p.sticks, (uint8_t[]){2, 0, 100, 2, 0, 100}, sizeof(p.sticks)));
+    original[1] = 4;
+    assert(!pad_profile_load(&p, original, sizeof(original)));
+    assert(p.version == PROFILE_VERSION && p.stick_flags == 3);
+
+    hand_state hands[2] = {{.x = -16384, .y = 16383}, {.x = INT16_MAX, .y = INT16_MIN}};
+    p.sticks[0] = (stick_settings){.flags = STICK_INVERT_X, .deadzone = 50, .sensitivity = 100};
+    p.sticks[1] = (stick_settings){.sensitivity = 25};
+    assert(pad_profile_valid(&p));
+    pad_report report = pad_compose(hands, &p);
+    check_sticks(&report, (int16_t[]){0, 0, 8192, -8192});
+    hands[0].x--; hands[0].y++;
+    report = pad_compose(hands, &p);
+    check_sticks(&report, (int16_t[]){2, 2, 8192, -8192});
+
+    hands[0].x = -24576; hands[0].y = 24576;
+    p.sticks[0] = (stick_settings){.flags = STICK_INVERT_X | STICK_INVERT_Y, .deadzone = 10, .sensitivity = 200};
+    report = pad_compose(hands, &p);
+    check_sticks(&report, (int16_t[]){INT16_MAX, INT16_MIN, 8192, -8192});
+    uint8_t standard[11];
+    pad_standard_report(&report, standard);
+    assert(!memcmp(standard, (uint8_t[]){127, 129, 31, 225}, 4));
+    p.stick_flags = 2;
+    report = pad_compose(hands, &p);
+    check_sticks(&report, (int16_t[]){0, 0, 8192, -8192});
+    const stick_settings invalid[] = {{4, 0, 100}, {0, 51, 100}, {0, 0, 24}, {0, 0, 201}};
+    for (unsigned i = 0; i < sizeof(invalid)/sizeof(invalid[0]); ++i) {
+        p.sticks[0] = invalid[i];
+        assert(!pad_profile_valid(&p));
     }
 }
 
@@ -244,6 +293,7 @@ int main(void)
 {
     test_touch_triggers();
     test_legacy_profile_upgrade();
+    test_stick_settings();
     test_many_to_many();
     test_names();
     pad_profile profile;

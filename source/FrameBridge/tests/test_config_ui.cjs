@@ -18,6 +18,7 @@ function fixtureDocument() {
       this.children = [];
       this.attributes = {};
       this.dataset = {};
+      this.style = {};
       this.content = '';
       this.classList = {
         toggle:(name, on) => {
@@ -73,8 +74,9 @@ function fixtureDocument() {
 }
 
 async function testUI(document, EventType = Event) {
-  const profile = new Uint8Array(1728);
-  profile[0] = 5;
+  const profile = new Uint8Array(1734);
+  profile[0] = 6;
+  profile.set([2,0,100,2,0,100],1728);
   for (let offset = 34; offset < 154; offset += 5) profile[offset] = 255;
   function readMask(bytes, source) {
     const i = 174 + source * 3;
@@ -131,6 +133,11 @@ async function testUI(document, EventType = Event) {
     assert.ok(!el(id).disabled, id + ' is disabled'); el(id).value = String(value);
     el(id).dispatchEvent(new EventType('change'));
   };
+  const slide = (id, value) => {
+    assert.ok(!el(id).disabled);
+    el(id).value = String(value);
+    el(id).dispatchEvent(new EventType('input'));
+  };
   const check = (id, checked) => {
     assert.ok(!el(id).disabled, id + ' is disabled');
     el(id).checked = checked;
@@ -153,7 +160,7 @@ async function testUI(document, EventType = Event) {
   }
   function tab(button, section) {
     click(button);
-    for (const id of ['live','mapping','sensors']) assert.equal(!!el(id).hidden, id !== section);
+    for (const id of ['live','mapping','sensors','joysticks']) assert.equal(!!el(id).hidden, id !== section);
     assert.equal(el(button).getAttribute('aria-pressed'), 'true');
   }
   function learn(action) {
@@ -227,6 +234,41 @@ async function testUI(document, EventType = Event) {
   assert.equal(live('right','click',0).state, 'offline');
   assert.doesNotMatch(content('right-steam-level'), /\b81\b/);
   state.seen[0] = 3; state.up[1] = 1; state.masks[1] = 0; await poll();
+
+  tab('joysticks-tab','joysticks');
+  state.axes = [[-32768,32767],[2800,6400]];
+  await poll();
+  assert.equal(content('stick-left-raw'), '-32768 / 32767');
+  assert.equal(content('stick-left-output'), '0 / 0', 'Disabled stick stays centered');
+  assert.equal(el('stick-left-invert-y').checked, true);
+  check('stick-left',true);
+  assert.equal(content('stick-left-output'), '-32768 / -32768');
+  check('stick-left-invert-x',true);
+  check('stick-left-invert-y',false);
+  slide('stick-left-sensitivity',50);
+  assert.equal(content('stick-left-output'), '16384 / 16384');
+  assert.equal(el('stick-left-sensitivity').getAttribute('aria-valuetext'), '50%');
+  slide('stick-left-deadzone',30);
+  state.axes[0]=[9000,-9000]; await poll();
+  assert.equal(content('stick-left-output'), '0 / 0');
+  assert.equal(content('stick-right-raw'), '2800 / 6400');
+  assert.equal(el('stick-right-revert').disabled, true, 'Hand settings are independent');
+  check('stick-right',true); slide('stick-right-sensitivity',200);
+  assert.equal(content('stick-right-output'), '5600 / -12800');
+  click('stick-right-revert');
+  assert.equal(el('stick-right').checked, false);
+  assert.equal(content('stick-right-output'), '0 / 0');
+  assert.equal(el('stick-left-deadzone').value,'30');
+  assert.equal(content('stick-dirty'),'Unsaved changes');
+  state.seen[0]=1; state.up[1]=0; await poll();
+  assert.equal(el('stick-left-raw-dot').hidden,true);
+  assert.equal(el('stick-left-output-dot').hidden,true);
+  assert.equal(content('stick-left-output'),'—');
+  assert.match(content('stick-left-status'), /waiting/i);
+  assert.match(content('stick-right-status'), /offline/i);
+  state.seen[0]=3; state.up[1]=1; await poll();
+  assert.equal(el('stick-left-raw-dot').hidden,false);
+  assert.equal(writes.length,0);
 
   tab('map-tab','mapping');
   const tbody = el('bindings');
@@ -358,6 +400,8 @@ async function testUI(document, EventType = Event) {
   assert.match(content('message'), /saved to board/i);
   noRowPrompt();
   assert.equal(writes.length, 1);
+  assert.equal(boardProfile[1],1);
+  assert.deepEqual([...boardProfile.slice(1728)],[1,30,50,2,0,100]);
   assert.equal(readMask(boardProfile,16), outputs(1,21));
   assert.equal(readMask(boardProfile,17), outputs(4));
   assert.equal(readMask(boardProfile,7), 0);
@@ -376,6 +420,12 @@ async function testUI(document, EventType = Event) {
   assert.match(liveRow('right','click',0).children[0].textContent, /Jump paddle/);
   assert.equal(live('right','click',1).output, 'Y');
   assert.equal(live('left','touch',8).output, 'R2');
+  tab('joysticks-tab','joysticks');
+  assert.equal(el('stick-left').checked,true);
+  assert.equal(el('stick-left-invert-x').checked,true);
+  assert.equal(el('stick-left-invert-y').checked,false);
+  assert.equal(el('stick-left-sensitivity').value,'50');
+  assert.equal(el('stick-left-revert').disabled,true);
   tab('map-tab','mapping');
   assert.equal(el('trigger-right-engage').value, '45');
   assert.equal(el('trigger-right-release').value, '150');

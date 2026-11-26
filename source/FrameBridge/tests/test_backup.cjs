@@ -56,7 +56,7 @@ for (const mutate of [
 // Migrate old single assignments and implicit press travel to the V5 wire format.
 for (const old of [legacy, Uint8Array.from([...legacy, 13, 9])]) {
   old[0] = old.length === 172 ? 3 : 4;
-  const migrated = backup.decode(backup.encode(old));
+  const migrated = backup.decode(backup.encode(old), 5);
   assert.equal(migrated.length, 1728);
   assert.equal(migrated[0], 5);
   assert.equal(migrated[1], old[1]);
@@ -70,7 +70,7 @@ for (const old of [legacy, Uint8Array.from([...legacy, 13, 9])]) {
   assert.equal(backup.mask(migrated, 37), 0);
   assert.ok(migrated.subarray(288).every(v => v === 0));
 }
-const v5 = backup.decode(exported);
+const v5 = backup.decode(exported, 5);
 const highestCombo = 1 | (1 << 15) | (1 << 21);
 backup.setMask(v5, 0, highestCombo);
 backup.setMask(v5, 31, highestCombo);
@@ -88,7 +88,7 @@ assert.deepEqual(v5data.right.buttons[15], v5data.left.buttons[0]);
 assert.deepEqual(v5data.left.travelOutputs[0], []);
 assert.deepEqual(v5data.right.travelOutputs[2], [22]);
 assert.equal(v5data.outputNames[0], '<action A>');
-assert.deepEqual(backup.decode(JSON.parse(JSON.stringify(v5data))), v5);
+assert.deepEqual(backup.decode(JSON.parse(JSON.stringify(v5data)), 5), v5);
 assert.throws(() => backup.decode(v5data, 4), /V5 firmware/);
 
 for (const invalid of ['a'.repeat(24), 'å'.repeat(12), '\u0000', 'a\n', '\u007F', '\u009F', '\uD800', '\uDC00', null]) {
@@ -134,4 +134,43 @@ assert.equal(backup.name(v5, 0), 'A');
 assert.ok(v5.subarray(289, 312).every(v => v === 0));
 backup.setName(v5, 0, '');
 assert.equal(backup.name(v5, 0), '');
-console.log('V3–V5 binding backups, mask migration, UTF-8 names and configuration validation passed.');
+// V6 keeps all V5 bindings and enabled flags and adds the old stick response by default.
+const defaultStick = {invertX:false, invertY:true, deadzone:0, sensitivity:100};
+for (const data of [backup.encode(legacy), exported, v5data]) {
+  const prior = backup.decode(data, 5);
+  const six = backup.decode(data);
+  assert.equal(six.length, 1734);
+  assert.equal(six[0], 6);
+  assert.deepEqual(six.subarray(1, 1728), prior.subarray(1));
+  assert.deepEqual([...six.subarray(1728)], [2,0,100,2,0,100]);
+  assert.deepEqual(backup.stick(six, 0), defaultStick);
+  assert.deepEqual(backup.stick(six, 1), defaultStick);
+}
+const six = backup.decode(v5data);
+const left = {invertX:true, invertY:false, deadzone:50, sensitivity:25};
+const right = {invertX:true, invertY:true, deadzone:18, sensitivity:200};
+backup.setStick(six, 0, left);
+backup.setStick(six, 1, right);
+assert.deepEqual([...six.subarray(1728)], [1,50,25,3,18,200]);
+const sixData = backup.encode(six);
+assert.deepEqual(sixData.left.stick, left);
+assert.deepEqual(sixData.right.stick, right);
+assert.deepEqual(backup.decode(JSON.parse(JSON.stringify(sixData)), 6), six);
+assert.throws(() => backup.decode(sixData, 5), /V6 firmware/);
+for (const invalid of [undefined, {...left, invertX:0}, {...left, invertY:'false'},
+  {...left, deadzone:51}, {...left, deadzone:-1}, {...left, deadzone:2.5},
+  {...left, sensitivity:24}, {...left, sensitivity:201}, {...left, sensitivity:'100'}]) {
+  const prior = six.slice();
+  assert.throws(() => backup.setStick(six, 0, invalid), /joystick/i);
+  assert.deepEqual(six, prior);
+  assert.throws(() => backup.decode({...sixData, left:{...sixData.left, stick:invalid}}), /joystick/i);
+}
+for (const [index, value] of [[1728,4], [1729,51], [1730,24], [1733,201]]) {
+  const corrupt = six.slice();
+  corrupt[index] = value;
+  assert.throws(() => backup.encode(corrupt), /joystick/i);
+}
+assert.throws(() => backup.stick(six, 2));
+assert.throws(() => backup.setStick(six, -1, left));
+assert.throws(() => backup.setStick(v5, 0, left));
+console.log('V3–V6 binding backups, joystick settings, mask migration, UTF-8 names and validation passed.');

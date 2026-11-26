@@ -25,6 +25,14 @@ int main(void)
     profile.stick_flags = 3;
     pad_report r = pad_compose(hands, &profile);
     check_packet(&r, (uint8_t[PRO3_INPUT_PAYLOAD_SIZE]){8, 63, 255, 191, 0});
+    profile.sticks[0] = (stick_settings){.flags = STICK_INVERT_X, .sensitivity = 200};
+    profile.sticks[1] = (stick_settings){.deadzone = 50, .sensitivity = 25};
+    r = pad_compose(hands, &profile);
+    uint8_t controls[PRO3_CONTROL_BYTES];
+    assert(pro3_encode_controls(&r, controls) == sizeof(controls));
+    const uint8_t tuned[PRO3_INPUT_PAYLOAD_SIZE] = {8, 255, 0, 127, 159};
+    assert(!memcmp(controls, tuned, sizeof(controls)));
+    check_packet(&r, tuned);
     profile.stick_flags = 0;
     r = pad_compose(hands, &profile);
     check_packet(&r, expected);

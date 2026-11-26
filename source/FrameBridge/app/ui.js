@@ -38,6 +38,83 @@ const bluetoothStatus = [
 ];
 const sourceCount = 32 + travelActions.length;
 const outputFlag = action => 1 << (action - 1);
+const stickEditors = ['left', 'right'].map(side => {
+  const field = key => byId('stick-' + side + '-' + key);
+  return {
+    enable:byId('stick-' + side), invertX:field('invert-x'), invertY:field('invert-y'),
+    deadzone:field('deadzone'), sensitivity:field('sensitivity'),
+    deadzoneValue:field('deadzone-value'), sensitivityValue:field('sensitivity-value'),
+    raw:field('raw'), output:field('output'), rawDot:field('raw-dot'), outputDot:field('output-dot'),
+    status:field('status'), revert:field('revert')
+  };
+});
+
+// Keep the preview in the same signed 16-bit space as the firmware's joystick transform.
+function shapeStickAxis(raw, deadzone, sensitivity, inverted) {
+  const limit = raw < 0 ? 32768 : 32767;
+  const cutoff = Math.floor(limit * deadzone / 100);
+  const magnitude = Math.abs(raw);
+  if (magnitude <= cutoff) return 0;
+  const span = limit - cutoff;
+  const scaled = Math.floor(((magnitude - cutoff) * limit + Math.floor(span / 2)) / span);
+  const gain = Math.min(limit, Math.floor((scaled * sensitivity + 50) / 100));
+  const axis = raw < 0 ? -gain : gain;
+  if (!inverted || !axis) return axis || 0;
+  if (axis === -32768) return 32767;
+  if (axis === 32767) return -32768;
+  return -axis;
+}
+
+function moveStickDot(dot, x, y) {
+  const position = value => (50 + 50 * value / (value < 0 ? 32768 : 32767)) + '%';
+  dot.style.left = position(x);
+  dot.style.top = position(y);
+}
+
+function updateStickPreview(state) {
+  if (currentView !== 'joysticks') return;
+  stickEditors.forEach((editor, h) => {
+    const active = draft && !!(draft[1] & (1 << h));
+    const axes = state?.up[h] && (state.seen[h] & 2) && state.axes?.[h];
+    editor.rawDot.hidden = !axes;
+    editor.outputDot.hidden = !axes || !draft;
+    editor.status.textContent = !state ? 'Board disconnected' : !state.up[h] ? 'Controller offline' :
+      !axes ? 'Waiting for stick input' : active ? '' : 'Stick output is disabled.';
+    editor.raw.textContent = axes ? axes.join(' / ') : '—';
+    editor.output.textContent = '—';
+    if (!axes) return;
+    moveStickDot(editor.rawDot, axes[0], axes[1]);
+    if (!draft) return;
+    const stick = BindingBackup.stick(draft, h);
+    const x = active ? shapeStickAxis(axes[0], stick.deadzone, stick.sensitivity, stick.invertX) : 0;
+    const y = active ? shapeStickAxis(axes[1], stick.deadzone, stick.sensitivity, stick.invertY) : 0;
+    editor.output.textContent = x + ' / ' + y;
+    moveStickDot(editor.outputDot, x, y);
+  });
+}
+
+function refreshStickEditors() {
+  if (currentView !== 'joysticks') return;
+  stickEditors.forEach((editor, h) => {
+    const {enable, invertX, invertY, deadzone, sensitivity, revert} = editor;
+    for (const control of [enable, invertX, invertY, deadzone, sensitivity]) control.disabled = !draft || saving;
+    revert.disabled = true;
+    if (!draft) return;
+    const stick = BindingBackup.stick(draft, h), prior = BindingBackup.stick(saved, h);
+    enable.checked = !!(draft[1] & (1 << h));
+    invertX.checked = stick.invertX;
+    invertY.checked = stick.invertY;
+    for (const key of ['deadzone', 'sensitivity']) {
+      const percent = stick[key] + '%';
+      editor[key].value = String(stick[key]);
+      editor[key].setAttribute('aria-valuetext', percent);
+      editor[key + 'Value'].textContent = percent;
+    }
+    const changed = ((draft[1] ^ saved[1]) & (1 << h)) || Object.keys(stick).some(k => stick[k] !== prior[k]);
+    revert.disabled = !changed || saving;
+  });
+  updateStickPreview(latest);
+}
 
 function pro3Name(action) {
   return pro3Outputs[action];
@@ -125,8 +202,8 @@ function triggerValuesChanged(editor) {
 }
 
 function refreshTriggerSettings() {
-  byId('trigger-settings').hidden = draft?.[0] !== 5;
-  if (draft?.[0] !== 5) return;
+  byId('trigger-settings').hidden = !draft;
+  if (!draft) return;
   updateTriggerLevels(latest);
   for (const editor of triggerEditors) {
     const {channel, release, engage, offset, apply, exclusive, source, click, output} = editor;
@@ -187,15 +264,20 @@ async function request(path, options={}) {
       options.method ? await response.text() : new Uint8Array(await response.arrayBuffer());
   } finally { clearTimeout(timeout); }
 }
-function redrawBindings() {
+function refreshDirtyState() {
   const changed = !!draft && draft.some((v,i)=>v!==saved[i]);
   label('dirty',changed ? 'Unsaved changes' : 'On board');
+  label('stick-dirty',changed ? 'Unsaved changes' : 'On board');
   byId('save').disabled = !changed || saving || !latest;
+}
+function redrawBindings() {
+  refreshDirtyState();
   byId('defaults').disabled = !draft || saving;
   byId('export').disabled = !draft || saving;
   byId('import').disabled = !draft || !latest || saving;
   byId('mapping').inert = saving;
   byId('sensors').inert = saving;
+  byId('joysticks').inert = saving;
   refreshSensorEditor();
   refreshTriggerSources();
   refreshSourceEditor();
@@ -235,10 +317,7 @@ function redrawBindings() {
   byId('pull-confirm').hidden=!pull?.candidates;
   byId('pull-capture').hidden=!!pull?.candidates;
   byId('pull-channel').hidden=!(pull?.candidates?.length>1);
-  ['left','right'].forEach((side,h)=>{
-    const el=byId('stick-'+side); el.disabled=!draft || saving;
-    el.checked=!!(draft && (draft[1] & (1<<h)));
-  });
+  refreshStickEditors();
 }
 function updateTravelButtons(state) {
   travelActions.forEach((action, index) => {
@@ -396,6 +475,7 @@ function updateLiveBindings(state) {
 
 function showState(state) {
   updateTriggerLevels(state);
+  updateStickPreview(state);
   label('network','Board connected');
   const wireless = usesBluetooth(state);
   const ready = wireless ? state.bluetooth === 4 : state.usb;
@@ -446,8 +526,8 @@ async function poll() {
       const previousSaved = saved;
       const p=await request('/api/profile');
       if (!defaultProfile || p[0] !== defaultProfile[0]) defaultProfile=await request('/api/defaults');
-      if (p[0] !== 5 || p[0] !== defaultProfile[0] ||
-          [p,defaultProfile].some(x => x.length !== BindingBackup.size(5))) {
+      if (p[0] !== 6 || p[0] !== defaultProfile[0] ||
+          [p,defaultProfile].some(x => x.length !== BindingBackup.size(6))) {
         throw Error('Reload setup to match the board firmware.');
       }
       if (saved === previousSaved && (!saved || p.length !== saved.length || p.some((v,i) => v !== saved[i]))) {
@@ -490,7 +570,7 @@ function openView(view) {
   endBinding();
   label('source-note', '');
   stopWizard();
-  for(const [tab,section] of [['live-tab','live'],['map-tab','mapping'],['sensors-tab','sensors']]){
+  for(const [tab,section] of [['live-tab','live'],['map-tab','mapping'],['sensors-tab','sensors'],['joysticks-tab','joysticks']]){
     byId(section).hidden=view!==section;
     byId(tab).setAttribute('aria-pressed',String(view===section));
   }
@@ -792,11 +872,33 @@ byId('save').onclick=async()=>{
   catch(e){note('Save could not be confirmed. Reconnect and retry.');}
   finally{saving=false;redrawBindings();}
 };
-['left','right'].forEach((s,h)=>{byId('stick-'+s).onchange=e=>{
-  draft[1]=(draft[1]&~(1<<h))|(Number(e.target.checked)<<h);redrawBindings();};});
+stickEditors.forEach((editor, h) => {
+  function stage() {
+    if (!draft || saving) return;
+    const mask = 1 << h;
+    draft[1] = editor.enable.checked ? draft[1] | mask : draft[1] & ~mask;
+    BindingBackup.setStick(draft, h, {
+      invertX:editor.invertX.checked, invertY:editor.invertY.checked,
+      deadzone:editor.deadzone.valueAsNumber, sensitivity:editor.sensitivity.valueAsNumber
+    });
+    refreshDirtyState();
+    refreshStickEditors();
+  }
+  editor.enable.onchange = editor.invertX.onchange = editor.invertY.onchange = stage;
+  editor.sensitivity.oninput = editor.deadzone.oninput = stage;
+  editor.revert.onclick = () => {
+    if (!draft || saving) return;
+    const mask = 1 << h;
+    draft[1] = (draft[1] & ~mask) | (saved[1] & mask);
+    BindingBackup.setStick(draft, h, BindingBackup.stick(saved, h));
+    refreshDirtyState();
+    refreshStickEditors();
+  };
+});
 byId('live-tab').onclick=()=>openView('live');
 byId('map-tab').onclick=()=>openView('mapping');
 byId('sensors-tab').onclick=()=>openView('sensors');
+byId('joysticks-tab').onclick=()=>openView('joysticks');
 document.addEventListener('visibilitychange',()=>{
   clearTimeout(timer);
   if(document.hidden && learning) endBinding('Learning paused. Choose Learn to try again.');
