@@ -23,6 +23,8 @@ extern const char backup_script[] asm("_binary_backup_js_start");
 static TaskHandle_t setup_task;
 static httpd_handle_t server;
 static bool initialized;
+// Handlers run serially in the HTTP server task. Share a buffer for profile requests.
+static pad_profile transfer_profile;
 static const char *TAG = "bridge-setup";
 
 static esp_err_t asset(httpd_req_t *req)
@@ -50,14 +52,13 @@ static esp_err_t snapshot(httpd_req_t *req)
     }
     snprintf(body, sizeof(body),
         "{\"raw\":[\"%s\",\"%s\"],\"seen\":[%u,%u],\"epoch\":[%lu,%lu],\"active\":[%u,%u],\"usb\":%u,\"usbLayout\":%u,\"standardUsb\":%u,\"up\":[%u,%u],\"masks\":[%u,%u],\"axes\":[[%d,%d],[%d,%d]],"
-        "\"touch\":%d,\"travel\":[%u,%u],\"packets\":[%lu,%lu],\"buttons\":%u,\"hat\":%u,"
+        "\"travel\":[%u,%u],\"packets\":[%lu,%lu],\"buttons\":%u,\"hat\":%u,"
         "\"triggers\":[%u,%u],\"bad\":%lu,\"overflows\":%lu}",
         raw[0], raw[1], s.hands[0].seen, s.hands[1].seen,
         (unsigned long)s.epoch[0], (unsigned long)s.epoch[1], s.hands[0].active, s.hands[1].active,
         s.usb, pairing.usb_layout, pairing.usb_layout == USB_LAYOUT_STANDARD,
         s.connected[0], s.connected[1], s.hands[0].buttons, s.hands[1].buttons,
         s.hands[0].x, s.hands[0].y, s.hands[1].x, s.hands[1].y,
-        pad_touch_level(&s.hands[RIGHT_HAND], &s.profile.touch[RIGHT_HAND][0]),
         s.hands[0].pressed_travel, s.hands[1].pressed_travel,
         (unsigned long)s.packets[0], (unsigned long)s.packets[1],
         pad_usb_buttons(&s.output), s.output.bytes[2],
@@ -70,35 +71,34 @@ static esp_err_t snapshot(httpd_req_t *req)
 
 static esp_err_t profile_get(httpd_req_t *req)
 {
-    bridge_status s;
-    bridge_get_status(&s);
+    bridge_get_profile(&transfer_profile);
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_type(req, "application/octet-stream");
-    return httpd_resp_send(req, (const char *)&s.profile, sizeof(s.profile));
+    return httpd_resp_send(req, (const char *)&transfer_profile, sizeof(transfer_profile));
 }
 
 static esp_err_t profile_defaults(httpd_req_t *req)
 {
-    pad_profile p = pad_defaults();
+    pad_defaults(&transfer_profile);
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_type(req, "application/octet-stream");
-    return httpd_resp_send(req, (const char *)&p, sizeof(p));
+    return httpd_resp_send(req, (const char *)&transfer_profile, sizeof(transfer_profile));
 }
 
 static esp_err_t profile_input(httpd_req_t *req)
 {
-    pad_profile p;
-    if (req->content_len != sizeof(p))
+    pad_profile *p = &transfer_profile;
+    if (req->content_len != sizeof(*p))
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unexpected profile length");
-    for (size_t used = 0; used < sizeof(p);) {
-        int n = httpd_req_recv(req, (char *)&p + used, sizeof(p) - used);
+    for (size_t used = 0; used < sizeof(*p);) {
+        int n = httpd_req_recv(req, (char *)p + used, sizeof(*p) - used);
         if (n <= 0) return ESP_FAIL;
         used += n;
     }
-    if (!pad_profile_valid(&p))
+    if (!pad_profile_valid(p))
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid profile");
     if (req->method == HTTP_POST) return httpd_resp_sendstr(req, "Valid");
-    if (bridge_save(&p) != ESP_OK)
+    if (bridge_save(p) != ESP_OK)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Flash write failed");
     return httpd_resp_sendstr(req, "Saved");
 }

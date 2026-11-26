@@ -1,4 +1,4 @@
-# FrameControllerBridge · V4
+# FrameControllerBridge · V5
 
 Use the left and right Steam Frame controllers as one wired USB gamepad. An ESP32-S3 receives each hand over Bluetooth Low Energy (BLE) and sends gamepad input through its native USB port. A browser on the board’s temporary Wi-Fi network lets you learn buttons, calibrate touch sensitivity and save a profile for use with the browser closed.
 
@@ -50,15 +50,15 @@ Copy your downloaded `frame_bridge-paired.bin` into `firmware`. Keep its filenam
 python -m esptool --chip esp32s3 --port PORT write-flash --flash-mode dio --flash-freq 80m --flash-size 2MB 0x0 bootloader/bootloader.bin 0x8000 partition_table/partition-table.bin 0x10000 frame_bridge-paired.bin
 ```
 
-### Upgrade a board running Frame Bridge V3
+### Upgrade a board running Frame Bridge V3 or V4
 
-To make a backup first, open V3 setup and choose **Bindings → Export JSON**. Copy your downloaded `frame_bridge-paired.bin` into the `firmware` folder, keeping its filename. From that folder, write just the application at the V3 factory-app offset. This preserves the bootloader, partition table and stored profile.
+To make a backup first, open the current setup page and choose **Bindings → Export JSON**. Copy your downloaded `frame_bridge-paired.bin` into the `firmware` folder, keeping its filename. From that folder, write just the application at the factory-app offset. This preserves the bootloader, partition table and stored profile.
 
 ```sh
 python -m esptool --chip esp32s3 --port PORT write-flash 0x10000 frame_bridge-paired.bin
 ```
 
-V4 loads a valid V3 profile, including its existing touch calibrations. Its two optional analog trigger sources start off. Saving the profile in V4 writes a separate settings entry. V4 can also import a V3 JSON backup.
+V5 loads saved V3 and V4 profiles, including learned travel thresholds, touch calibrations, and any V4 analog trigger sources. Saving writes a separate V5 settings entry. V3 and V4 JSON backups can also be imported. The new defaults apply to fresh profiles and to **Restore defaults**.
 
 After either procedure, wait for esptool to finish verifying the image. Tap RESET if the board stays in downloader mode. Connect the board’s **native USB/OTG data port** to the host for gameplay. On boards with separate USB and UART connectors, the UART connector is for programming and serial access.
 
@@ -71,7 +71,7 @@ After either procedure, wait for esptool to finish verifying the image. Tap RESE
 
 ## Bind clicks, grips and sticks
 
-A fresh profile maps the right face buttons to A/B/X/Y, the left D-pad to four directions, and each bumper and stick click to its matching side. Left View sends Select, left Steam sends Start, and right Menu sends Home. Trigger and grab presses start unbound. The **Bindings** table shows the Pro 3 output, the Steam Frame button assigned to it, and its actual left or right report bit. A learned travel input shows its report byte. Unknown buttons retain their hand and bit number.
+A fresh profile maps the right face buttons to A/B/X/Y, the left D-pad to four directions, and each bumper and stick click to its matching side. Left View sends Select and left Steam sends Start. With the Pro 3 layout, both right Menu and right Steam send Home. Left and right bit 7 send L2 and R2. Grab presses start unbound. The **Bindings** table shows the Pro 3 output, the Steam Frame button assigned to it, and its actual left or right report bit. A learned travel input shows its report byte. Unknown buttons retain their hand and bit number.
 
 | Binding in setup | Gamepad output |
 | --- | --- |
@@ -80,13 +80,17 @@ A fresh profile maps the right face buttons to A/B/X/Y, the left D-pad to four d
 | L grab full click / R grab full click | L4 / R4 |
 | Right Steam | Home, shared with the Home binding |
 
-Choose **Learn** beside an action, then press and hold just the physical input you want to use. Prompts, capture controls and results appear beside **Learn** and **Clear** in that row. For a full grab click, hold the first stage before choosing Learn, then squeeze through the second stage. If a trigger or grab produces travel without a distinct click, choose Learn at rest (or with the first stage held), pull to the desired position, choose **Capture held travel**, release, then choose **Confirm release**. Choose **Save to board** to apply your changes.
+Choose **Learn** beside an output, then press a physical button to add that input. For example, learn right A under both A and B to make one press send both outputs. Learn left bumper under A as well and either physical button can hold A. The game receives the release when the last input holding A is released.
+
+To edit from the other direction, open **Edit by Steam Frame button**, select a physical source, and check or uncheck its outputs. Unchecking one output removes that connection. **Clear** on an output row removes its button and travel connections. Rename a physical source or a gamepad output to show your own label in setup and Live inputs. Choose **Save to board** to apply mappings and names.
+
+For a trigger or grab, start travel calibration at rest, squeeze to the desired position, choose **Capture held travel**, release, and choose **Confirm release**. For a full grab click, start with the first stage already held. The trigger settings also let you select report byte 6 or 7 and set separate activation and release levels from 0 to 255 for each hand. Watch both live bytes while squeezing and releasing to identify the channel and direction. Choose **Apply values** after editing the thresholds. If the bit 7 click also drives that trigger, choose **Use travel for L2** or **Use travel for R2**, then **Save to board**.
 
 Stick axes are experimental and start disabled. **Live inputs** shows the raw X and Y readings from each controller. Enable the sticks you want under **Bindings**. From firmware 4.0.1, all three USB layouts invert each stick’s Y reading when sending it to the game.
 
 ## Calibrate touch and sensitivity
 
-Every touch surface starts **uncalibrated** on a fresh profile. Learn each surface you want to use on your own controllers. The left D-pad offers one shared touch contact and four separately bindable directional clicks.
+Every touch surface starts **uncalibrated** on a fresh profile. Learn each surface you want to use on your own controllers. The left D-pad offers one shared touch contact and four separately bindable directional clicks. On the right hand, report `0x19` byte 5 carries the Steam signal and report `0x14` bit 8 carries its click. The right-hand card shows the raw Steam level. Select **Touch → Right hand → Steam** to calibrate its touch thresholds and assign an output.
 
 1. Under **Touch**, both hands’ surfaces are listed with their calibration and output. Select a surface from either hand to open its editor, then choose **Learn touch**. Keep the controller steady and nearby fingers still. Touch lightly without clicking. For a grip sensor, lift and rest just the selected finger.
 2. Follow the five **Capture** prompts in order. Alternate between lifted, touching, lifted, touching and lifted. If several candidate signals move, preview one and move the target finger and adjacent fingers independently. Choose **Use this signal** once it follows the intended finger.

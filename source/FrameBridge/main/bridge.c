@@ -7,6 +7,7 @@
 
 enum { QUEUE_SIZE = 32 };
 static bridge_status status;
+static pad_profile profile;
 static pad_report reports[QUEUE_SIZE];
 static uint32_t first, end;
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
@@ -24,7 +25,7 @@ static void enqueue_locked(void)
 
 static bool update_locked(void)
 {
-    pad_report next = pad_compose(status.hands, &status.profile);
+    pad_report next = pad_compose(status.hands, &profile);
     // Other layouts only send the original 12 bytes. Keep analog levels visible in setup
     // without queueing identical USB reports for those hosts.
     size_t size = pairing.usb_layout == USB_LAYOUT_PRO3 ? sizeof(next) : sizeof(next.bytes);
@@ -94,13 +95,13 @@ void bridge_receive(unsigned h, const uint8_t *bytes, size_t size)
         ++status.packets[h];
         bool fields_changed = status.hands[h].revision != revision;
         if (fields_changed) {
-            pad_update_travel(&status.hands[h], status.profile.travel[h]);
-            pad_update_touch(&status.hands[h], status.profile.touch[h]);
+            pad_update_travel(&status.hands[h], profile.travel[h]);
+            pad_update_touch(&status.hands[h], profile.touch[h]);
         }
         const hand_state *v = &status.hands[h];
         if (v->buttons != old_buttons ||
-            ((status.profile.stick_flags & (1U << h)) && (v->x != old_x || v->y != old_y)) ||
-            (fields_changed && (status.profile.trigger_source[0] || status.profile.trigger_source[1])) ||
+            ((profile.stick_flags & (1U << h)) && (v->x != old_x || v->y != old_y)) ||
+            (fields_changed && (profile.trigger_source[0] || profile.trigger_source[1])) ||
             v->active != old_touch || v->pressed_travel != old_travel) {
             send = update_locked();
         }
@@ -118,18 +119,25 @@ void bridge_get_status(bridge_status *out)
     portEXIT_CRITICAL(&lock);
 }
 
+void bridge_get_profile(pad_profile *out)
+{
+    portENTER_CRITICAL(&lock);
+    *out = profile;
+    portEXIT_CRITICAL(&lock);
+}
+
 esp_err_t bridge_save(const pad_profile *p)
 {
     if (!pad_profile_valid(p)) return ESP_ERR_INVALID_ARG;
     nvs_handle_t nvs;
     esp_err_t err = nvs_open("framebridge", NVS_READWRITE, &nvs);
     if (err != ESP_OK) return err;
-    err = nvs_set_blob(nvs, "profile_v4", p, sizeof(*p));
+    err = nvs_set_blob(nvs, "profile_v5", p, sizeof(*p));
     if (err == ESP_OK) err = nvs_commit(nvs);
     nvs_close(nvs);
     if (err != ESP_OK) return err;
     portENTER_CRITICAL(&lock);
-    status.profile = *p;
+    profile = *p;
     for (unsigned h = 0; h < HAND_COUNT; ++h) {
         status.hands[h].active = 0;
         status.hands[h].pressed_travel = 0;
@@ -142,22 +150,35 @@ esp_err_t bridge_save(const pad_profile *p)
     return ESP_OK;
 }
 
+static bool read_profile(nvs_handle_t nvs)
+{
+    // At startup there are no readers yet. Read V5 straight into its permanent
+    // storage so the NVS call never puts the large profile on the main task's stack.
+    size_t size = sizeof(profile);
+    if (nvs_get_blob(nvs, "profile_v5", &profile, &size) == ESP_OK &&
+        size == sizeof(profile) && pad_profile_valid(&profile)) return true;
+
+    uint8_t bytes[V4_PROFILE_BYTES];
+    const char *keys[] = {"profile_v4", "profile"};
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+        size = sizeof(bytes);
+        if (nvs_get_blob(nvs, keys[i], bytes, &size) != ESP_OK) continue;
+        if (i == 0 && (size != V4_PROFILE_BYTES || bytes[0] != 4)) continue;
+        if (pad_profile_load(&profile, bytes, size)) return true;
+    }
+    return false;
+}
+
 void bridge_init(void)
 {
-    status.profile = pad_defaults();
+    bool loaded = false;
     nvs_handle_t nvs;
     if (nvs_open("framebridge", NVS_READONLY, &nvs) == ESP_OK) {
-        uint8_t saved[LEGACY_PROFILE_BYTES > sizeof(pad_profile) ? LEGACY_PROFILE_BYTES : sizeof(pad_profile)];
-        const char *keys[] = {"profile_v4", "profile"};
-        for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
-            size_t size = sizeof(saved);
-            if (nvs_get_blob(nvs, keys[i], saved, &size) != ESP_OK) continue;
-            if (i == 0 && (size != sizeof(pad_profile) || saved[0] != PROFILE_VERSION)) continue;
-            if (pad_profile_load(&status.profile, saved, size)) break;
-        }
+        loaded = read_profile(nvs);
         nvs_close(nvs);
     }
-    status.output = pad_compose(status.hands, &status.profile);
+    if (!loaded) pad_defaults(&profile);
+    status.output = pad_compose(status.hands, &profile);
     BaseType_t created = xTaskCreate(transmit, "gamepad-tx", 3072, NULL, 6, &tx_task);
     ESP_ERROR_CHECK(created == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     usb_pad_init();

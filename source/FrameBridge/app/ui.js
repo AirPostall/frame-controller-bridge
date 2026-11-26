@@ -9,8 +9,8 @@ const pro3Outputs = ['Off', 'A', 'B', 'X', 'Y', 'L1', 'R1', 'Select', 'Start',
   'L2', 'R2', 'PL', 'PR', 'Home', 'L4', 'R4'];
 const pro3RowTitles = {7:'− Select', 8:'+ Start', 20:'Home (alternate binding)'};
 const measuredButtons = [
-  {0:'D-pad down', 1:'D-pad right', 2:'D-pad left', 3:'D-pad up', 5:'bumper', 6:'stick click', 8:'Steam', 9:'View'},
-  {0:'A', 1:'B', 2:'X', 3:'Y', 5:'bumper', 6:'stick click', 9:'Menu'}
+  {0:'D-pad down', 1:'D-pad right', 2:'D-pad left', 3:'D-pad up', 5:'bumper', 6:'stick click', 7:'L2', 8:'Steam', 9:'View'},
+  {0:'A', 1:'B', 2:'X', 3:'Y', 5:'bumper', 6:'stick click', 7:'R2', 8:'Steam', 9:'Menu'}
 ];
 const usbLayouts = ['Extended', 'Standard', 'Wired Pro 3'];
 const triggerSelectors = ['lt-source', 'rt-source'];
@@ -18,25 +18,48 @@ const travelOffset = index => 154 + 3*index;
 let defaultProfile, pull=null;
 const sides = ['Left', 'Right'];
 const hats = ['Up', 'Up-right', 'Right', 'Down-right', 'Down', 'Down-left', 'Left', 'Up-left'];
-let saved, draft, latest, learning = 0, previousMasks, previousUp;
+let saved, draft, latest, learning = 0, renaming = 0, previousMasks, previousUp;
+let selectedSource = 0;
 let timer, busy = false, saving = false;
 const label = (id, value) => { const el=byId(id); if(el.textContent!==String(value)) el.textContent=value; };
 const note = value => label('message', value);
 const bindingNote = value => label('binding-message', value);
-const bindingIndex = (side, bit) => 2 + side * 16 + bit;
 const usbLayout = state => state?.usbLayout ?? (state?.standardUsb ? 1 : 0);
+const sourceCount = 32 + travelActions.length;
+const outputFlag = action => 1 << (action - 1);
 
 function pro3Name(action) {
   return pro3Outputs[action];
 }
 
-function outputName(action, layout) {
-  return layout === 2 ? pro3Name(action) : action === 0 ? 'Off' : names[action];
+function outputName(action, layout, profile = draft) {
+  const alias = profile && action ? BindingBackup.name(profile, 37 + action) : '';
+  return alias || (layout === 2 ? pro3Name(action) : action === 0 ? 'Off' : names[action]);
 }
 
-function steamButtonName(hand, bit) {
+function steamButtonName(hand, bit, profile = draft) {
+  const alias = profile && BindingBackup.name(profile, hand * 16 + bit);
+  if (alias) return alias;
   const name = measuredButtons[hand]?.[bit];
-  return name ? sides[hand] + ' ' + name : 'Unknown button';
+  if (bit === 7) return name;
+  return sides[hand] + (name ? ' ' + name : ' button bit ' + bit);
+}
+
+function physicalSourceName(source, profile = draft) {
+  if (source < 32) return steamButtonName(Math.floor(source / 16), source % 16, profile);
+  return (profile && BindingBackup.name(profile, source)) || learnTarget(travelActions[source - 32]) + ' travel';
+}
+
+function sourceSignal(source, profile) {
+  if (source < 32) return sides[Math.floor(source / 16)] + ' bit ' + source % 16;
+  const index = source - 32, channel = profile[travelOffset(index)];
+  return channel ? sides[Math.floor(index / 3)] + ' travel · 0x14 byte ' + (5 + channel) : 'Uncalibrated travel';
+}
+
+function outputTitle(action, layout) {
+  const canonical = layout === 2 ? pro3RowTitles[action] || pro3Name(action) : outputName(action, layout, null);
+  const alias = draft && BindingBackup.name(draft, 37 + action);
+  return alias ? alias + ' (' + canonical + ')' : canonical;
 }
 
 function learnTarget(action) {
@@ -58,8 +81,67 @@ function sourceLines(id, entries) {
   }
 }
 
+const triggerEditors = ['left', 'right'].map((side, h) => {
+  const field = name => byId('trigger-' + side + '-' + name);
+  return {
+    h, offset:travelOffset(h*3), source:32+h*3, click:h*16+7, output:1 << (15+h),
+    channel:field('channel'), release:field('release'), engage:field('engage'),
+    apply:field('apply'), exclusive:field('exclusive'), note:field('note'), levels:field('levels')
+  };
+});
+
+function updateTriggerLevels(state) {
+  if (currentView !== 'mapping') return;
+  for (const {levels, h} of triggerEditors) {
+    let message = 'Board disconnected';
+    if (state) {
+      if (!state.up[h]) message = 'Controller offline';
+      else if (!(state.seen[h] & 2)) message = 'Waiting for trigger travel';
+      else {
+        const [first, second] = travelBytes(state, h);
+        message = 'Byte 6 · ' + first + ' / 255  |  Byte 7 · ' + second + ' / 255';
+      }
+    }
+    if (levels.textContent !== message) levels.textContent = message;
+  }
+}
+
+function triggerValuesChanged(editor) {
+  const {channel, release, engage, offset} = editor;
+  const selected = Number(channel.value);
+  return selected !== draft[offset] || (selected !== 0 &&
+    (release.valueAsNumber !== draft[offset+1] || engage.valueAsNumber !== draft[offset+2]));
+}
+
+function refreshTriggerSettings() {
+  byId('trigger-settings').hidden = draft?.[0] !== 5;
+  if (draft?.[0] !== 5) return;
+  updateTriggerLevels(latest);
+  for (const editor of triggerEditors) {
+    const {channel, release, engage, offset, apply, exclusive, source, click, output} = editor;
+    const calibration = draft.slice(offset, offset+3).join(',');
+    if (editor.profile !== draft || editor.calibration !== calibration) {
+      if (editor.profile !== draft) editor.note.textContent = '';
+      editor.profile = draft;
+      editor.calibration = calibration;
+      channel.value = String(draft[offset]);
+      release.value = draft[offset] ? String(draft[offset+1]) : '';
+      engage.value = draft[offset] ? String(draft[offset+2]) : '';
+    }
+    channel.disabled = saving;
+    release.disabled = engage.disabled = saving || Number(channel.value) === 0;
+    const pending = triggerValuesChanged(editor);
+    apply.disabled = saving || !pending;
+    if (pending && currentView === 'mapping') byId('save').disabled = true;
+    exclusive.hidden = !draft[offset] ||
+      (!(BindingBackup.mask(draft, click) & output) && !!(BindingBackup.mask(draft, source) & output));
+    exclusive.disabled = saving || pending;
+  }
+}
+
 function refreshTriggerSources() {
-  const enabled = usbLayout(latest) === 2 && draft?.[0] === 4;
+  refreshTriggerSettings();
+  const enabled = usbLayout(latest) === 2 && draft?.[0] >= 4;
   byId('analog-routing').hidden = !enabled;
   if (!enabled) return;
   triggerSelectors.forEach((id, output) => {
@@ -105,41 +187,39 @@ function redrawBindings() {
   byId('sensors').inert = saving;
   refreshSensorEditor();
   refreshTriggerSources();
-  byId('cancel').hidden = !learning;
+  refreshSourceEditor();
+  byId('output-rename').hidden = !renaming;
+  byId('cancel').hidden = !learning && !renaming;
+  label('cancel', renaming ? 'Cancel rename' : 'Cancel learn');
   const layout = usbLayout(latest);
   for (let action = 1; action < names.length; action++) {
     const physical = [], bits = [];
     if (draft) {
-      for (let hand = 0; hand < 2; hand++) {
-        for (let bit = 0; bit < 16; bit++) {
-          if (draft[bindingIndex(hand,bit)] !== action) continue;
-          physical.push(steamButtonName(hand, bit));
-          bits.push(sides[hand] + ' bit ' + bit);
+      for (let source = 0; source < sourceCount; ++source) {
+        if (BindingBackup.mask(draft, source) & outputFlag(action)) {
+          physical.push(physicalSourceName(source));
+          bits.push(sourceSignal(source, draft));
         }
-      }
-      const index = travelActions.indexOf(action);
-      if (index >= 0 && draft[travelOffset(index)]) {
-        const channel = draft[travelOffset(index)];
-        physical.push(learnTarget(action));
-        bits.push(sides[Math.floor(index / 3)] + ' travel · 0x14 byte ' + (5 + channel));
       }
     }
     const target = learnTarget(action);
     const empty = draft ? (target ? 'Unbound · learn ' + target : 'Unbound') : 'Waiting for board';
     sourceLines('binding-' + action, physical.length ? physical : [empty]);
     sourceLines('bit-' + action, bits.length ? bits : ['—']);
-    const output = outputName(action, layout);
+    label('action-' + action, outputTitle(action, 2));
     const alternate = byId('layout-name-' + action);
     alternate.hidden = !latest || layout === 2;
-    if (!alternate.hidden) alternate.textContent = usbLayouts[layout] + ' · ' + output;
-    const labelName = action === 20 && layout === 2 ? pro3RowTitles[20] : output;
+    if (!alternate.hidden) alternate.textContent = usbLayouts[layout] + ' · ' + outputName(action, layout, null);
+    const labelName = outputTitle(action, layout);
     byId('learn-' + action).setAttribute('aria-label', 'Learn ' + labelName);
     byId('clear-' + action).setAttribute('aria-label', 'Clear ' + labelName);
     label('touch-action-' + action, labelName);
     label('learn-' + action, learning === action ? 'Listening…' : 'Learn');
     byId('learn-' + action).disabled = !draft || !latest || saving;
     byId('clear-' + action).disabled = !bits.length || saving;
+    byId('rename-' + action).disabled = !draft || saving;
   }
+  updateTravelButtons(latest);
   byId('pull-tools').hidden=!learning || !pull;
   byId('pull-confirm').hidden=!pull?.candidates;
   byId('pull-capture').hidden=!!pull?.candidates;
@@ -149,10 +229,18 @@ function redrawBindings() {
     el.checked=!!(draft && (draft[1] & (1<<h)));
   });
 }
+function updateTravelButtons(state) {
+  travelActions.forEach((action, index) => {
+    const side = Math.floor(index / 3);
+    const disabled = !draft || saving || !state?.up[side] || !(state.seen[side] & 2);
+    const button = byId('calibrate-travel-' + action);
+    if (button.disabled !== disabled) button.disabled = disabled;
+  });
+}
 function clearAction(action) {
-  for(let i=2;i<34;i++) if(draft[i]===action) draft[i]=0;
-  const index=travelActions.indexOf(action);
-  if(index>=0) draft.fill(0,travelOffset(index),travelOffset(index)+3);
+  for (let source = 0; source < sourceCount; ++source) {
+    BindingBackup.setMask(draft, source, BindingBackup.mask(draft, source) & ~outputFlag(action));
+  }
 }
 function showBindingFeedback(cell) {
   const panel = byId('binding-feedback');
@@ -162,10 +250,11 @@ function showBindingFeedback(cell) {
 }
 function endBinding(message = '') {
   const panel = byId('binding-feedback');
-  if (learning && message && !document.hidden && panel.contains(document.activeElement)) {
-    byId('learn-' + learning).focus({preventScroll:true});
+  if ((learning || renaming) && message && !document.hidden && panel.contains(document.activeElement)) {
+    byId(renaming ? 'rename-' + renaming : 'learn-' + learning).focus({preventScroll:true});
   }
   learning = 0;
+  renaming = 0;
   pull = null;
   bindingNote(message);
   panel.hidden = !message;
@@ -174,7 +263,7 @@ function learnFrom(state) {
   if(pull && (!state.up[pull.hand] || state.epoch[pull.hand]!==pull.epoch)) {
     endBinding('Controller disconnected. Start learning again.');redrawBindings();return;
   }
-  if(pull?.candidates) return;
+  if(pull?.travelOnly || pull?.candidates) return;
   // A reconnect or a button already held when learning starts is not a new press.
   const edges=[];
   for(let h=0;h<2;h++) if(state.up[h] && previousUp[h]) {
@@ -184,10 +273,11 @@ function learnFrom(state) {
   previousMasks=state.masks.slice(); previousUp=state.up.slice();
   if(edges.length>1){bindingNote('Several bits changed. Release them and press one button.');return;}
   if(edges.length!==1) return;
-  const [h,b]=edges[0], index=bindingIndex(h,b), old=draft[index], action=learning;
-  clearAction(action); draft[index]=action;
-  const layout = usbLayout(state);
-  endBinding(sides[h]+' bit '+b+' → '+outputName(action, layout)+(old && old!==action ? ' (previously '+outputName(old, layout)+')' : '')+'. Save to apply.');
+  const [h,b] = edges[0], source = h * 16 + b;
+  const old = BindingBackup.mask(draft, source), flag = outputFlag(learning);
+  BindingBackup.setMask(draft, source, old | flag);
+  const route = sourceSignal(source, draft) + ' → ' + outputName(learning, usbLayout(state));
+  endBinding(route + (old & flag ? ' is already assigned.' : '. Save to apply.'));
   redrawBindings();
 }
 const liveRows = [];
@@ -201,7 +291,7 @@ function buildLiveBindings(profile, layout) {
     const list = byId('live-' + side + '-bindings');
     const empty = byId('live-' + side + '-empty');
     list.replaceChildren();
-    function add(kind, index, name, action, offset) {
+    function add(kind, index, name, outputs, offset) {
       const row = document.createElement('li');
       row.className = 'live-binding';
       row.dataset.kind = kind;
@@ -211,7 +301,7 @@ function buildLiveBindings(profile, layout) {
       source.textContent = name;
       const target = document.createElement('span');
       target.className = 'live-target';
-      target.textContent = outputName(action, layout) + (kind === 'analog' ? ' level' : '');
+      target.textContent = outputs;
       const status = document.createElement('span');
       status.className = 'live-status';
       row.append(source, target, status);
@@ -219,27 +309,33 @@ function buildLiveBindings(profile, layout) {
       const block = offset !== undefined && profile[offset] < 14 ? 1 : 2;
       liveRows.push({row, status, h, kind, index, offset, block});
     }
+    function pressOutputs(source) {
+      const mask = BindingBackup.mask(profile, source);
+      const outputs = [];
+      for (let action = 1; action < names.length; action++) {
+        if (mask & (1 << (action - 1))) outputs.push(outputName(action, layout, profile));
+      }
+      return outputs.join(' + ');
+    }
     for (let bit = 0; bit < 16; ++bit) {
-      const action = profile[bindingIndex(h, bit)];
-      if (!action) continue;
-      const name = steamButtonName(h, bit);
-      add('click', bit, name === 'Unknown button' ? name + ' · bit ' + bit : name, action);
+      const source = h * 16 + bit, outputs = pressOutputs(source);
+      if (outputs) add('click', bit, physicalSourceName(source, profile), outputs);
     }
     for (let i = 0; i < 3; ++i) {
-      const n = h * 3 + i, channel = profile[travelOffset(n)];
-      if (channel) {
-        const control = ['Trigger travel', 'Grab travel', 'Full grab travel'][i];
-        add('travel', i, control + ' · byte ' + (5 + channel), travelActions[n]);
+      const index = h * 3 + i, channel = profile[travelOffset(index)];
+      const source = 32 + index, outputs = pressOutputs(source);
+      if (channel && outputs) {
+        add('travel', i, physicalSourceName(source, profile) + ' · byte ' + (5 + channel), outputs);
       }
     }
     Touch.slots[h].forEach((surface, slot) => {
       const offset = Touch.offset(h, slot), action = profile[offset + 4];
       if (profile[offset] === Touch.empty) return;
-      if (action) add('touch', slot, surface + ' touch', action, offset);
-      if (layout !== 2 || profile[0] !== 4) return;
+      if (action) add('touch', slot, surface + ' touch', outputName(action, layout, profile), offset);
+      if (layout !== 2) return;
       for (let output = 0; output < 2; ++output) {
         if (profile[BindingBackup.triggerOffset + output] === 1 + h * 12 + slot)
-          add('analog', output, surface + ' touch', 16 + output, offset);
+          add('analog', output, surface + ' touch', outputName(16 + output, layout, profile) + ' level', offset);
       }
     });
     empty.hidden = list.children.length > 0;
@@ -286,6 +382,7 @@ function updateLiveBindings(state) {
 }
 
 function showState(state) {
+  updateTriggerLevels(state);
   label('network','Board connected'); label('usb',state.usb?'USB · connected':'USB · waiting');
   const layout = usbLayouts[usbLayout(state)] || 'Unknown USB layout';
   label('host-check', layout + (state.usb
@@ -301,14 +398,13 @@ function showState(state) {
   }
   updateSensorState(state);
   updateLiveBindings(state);
-  const hasContactLevel = state.up[1] && state.touch >= 0;
-  byId('touch').value = hasContactLevel ? state.touch : 0;
-  label('touch-text', hasContactLevel ? state.touch+' / 255' : '—');
+  const rightSteam = state.up[1] && (state.seen[1] & 1);
+  label('right-steam-level', rightSteam ? parseInt(state.raw[1].slice(10,12),16) + ' / 255' : '—');
   const pro3 = usbLayout(state) === 2;
   const outputs=[];
   for(let i=0;i<18;i++) if(state.buttons & (1<<i)) {
     const action = i<11?i+1:i+5;
-    const output = outputName(action, usbLayout(state));
+    const output = outputName(action, usbLayout(state), saved);
     if (!outputs.includes(output)) outputs.push(output);
   }
   if(state.hat<8) outputs.push('D-pad '+hats[state.hat].toLowerCase());
@@ -328,8 +424,10 @@ async function poll() {
       const previousSaved = saved;
       const p=await request('/api/profile');
       if (!defaultProfile || p[0] !== defaultProfile[0]) defaultProfile=await request('/api/defaults');
-      if(!BindingBackup.size(p[0]) || p[0]!==defaultProfile[0] ||
-         [p,defaultProfile].some(x=>x.length!==BindingBackup.size(x[0]))) throw Error('Unsupported profile');
+      if (p[0] !== 5 || p[0] !== defaultProfile[0] ||
+          [p,defaultProfile].some(x => x.length !== BindingBackup.size(5))) {
+        throw Error('Reload setup to match the board firmware.');
+      }
       if (saved === previousSaved && (!saved || p.length !== saved.length || p.some((v,i) => v !== saved[i]))) {
         const keepDraft = draft?.length === p.length && draft.some((v,i) => v !== saved[i]);
         saved = p;
@@ -341,17 +439,21 @@ async function poll() {
     if(learning) learnFrom(state);
     showState(state);
     if(reconnect) redrawBindings();
+    else if(currentView==='mapping') updateTravelButtons(state);
   } catch(e) {
     if(wizard || alternatives.length) stopWizard('Board disconnected. Reconnect and start the capture again.');
     if(learning) endBinding('Board disconnected. Reconnect and choose Learn again.');
     latest=null; previews=[0,0]; previousEpoch=null;
+    updateTriggerLevels(null);
     label('sensor-value','—'); byId('sensor-meter').value=0;
-    label('touch-left','Left · offline'); label('touch-right','Right · offline'); label('network','Board disconnected'); label('usb','USB · unknown');
+    label('touch-left','Left · offline'); label('touch-right','Right · offline');
+    label('network',e.message === 'Reload setup to match the board firmware.' ? e.message : 'Board disconnected');
+    label('usb','USB · unknown');
     for(const side of ['left','right']){
       for(const field of ['mask','count','xy','link']) label(side+'-'+field,'—');
       byId(side+'-link').classList.remove('active');
     }
-    byId('touch').value=0; label('touch-text','—'); label('output','Waiting for board'); label('host-check','Waiting for board');
+    label('right-steam-level','—'); label('output','Waiting for board'); label('host-check','Waiting for board');
     byId('trigger-levels').hidden = true;
     updateLiveBindings(null);
     byId('diagnostic').hidden=true; redrawBindings();
@@ -363,6 +465,7 @@ async function poll() {
 function openView(view) {
   currentView=view;
   endBinding();
+  label('source-note', '');
   stopWizard();
   for(const [tab,section] of [['live-tab','live'],['map-tab','mapping'],['sensors-tab','sensors']]){
     byId(section).hidden=view!==section;
@@ -372,6 +475,77 @@ function openView(view) {
   updateLiveBindings(latest);
   redrawBindings();
 }
+
+const sourceOptions = [], sourceChecks = [];
+for (let source = 0; source < sourceCount; ++source) {
+  const option = document.createElement('option');
+  option.value = String(source);
+  byId('binding-source').append(option);
+  sourceOptions.push(option);
+}
+for (let action = 1; action < names.length; ++action) {
+  const option = document.createElement('label');
+  const check = document.createElement('input'), caption = document.createElement('span');
+  check.type = 'checkbox';
+  check.id = 'source-output-' + action;
+  check.onchange = () => {
+    const old = BindingBackup.mask(draft, selectedSource), flag = outputFlag(action);
+    BindingBackup.setMask(draft, selectedSource, check.checked ? old | flag : old & ~flag);
+    endBinding();
+    label('source-note', 'Outputs updated. Save to apply.');
+    redrawBindings();
+  };
+  option.append(check, caption);
+  byId('output-choices').append(option);
+  sourceChecks.push({check, caption});
+}
+
+function refreshSourceEditor() {
+  const locked = !draft || saving;
+  const select = byId('binding-source'), name = byId('source-name');
+  select.disabled = name.disabled = locked;
+  byId('apply-source-name').disabled = locked;
+  for (const [source, option] of sourceOptions.entries()) {
+    const canonical = physicalSourceName(source, null);
+    const alias = draft && BindingBackup.name(draft, source);
+    const signal = source < 32 && measuredButtons[Math.floor(source / 16)][source % 16] ? ' · bit ' + source % 16 : '';
+    const title = (alias ? alias + ' (' + canonical + ')' : canonical) + signal;
+    if (option.textContent !== title) option.textContent = title;
+  }
+  select.value = String(selectedSource);
+  if (document.activeElement !== name) name.value = draft ? BindingBackup.name(draft, selectedSource) : '';
+  const mask = draft ? BindingBackup.mask(draft, selectedSource) : 0;
+  for (const [i, {check, caption}] of sourceChecks.entries()) {
+    const action = i + 1, title = outputTitle(action, usbLayout(latest));
+    check.checked = !!(mask & outputFlag(action));
+    check.disabled = locked;
+    if (caption.textContent !== title) caption.textContent = title;
+  }
+}
+byId('binding-source').onchange = e => {
+  selectedSource = Number(e.target.value);
+  endBinding();
+  label('source-note', '');
+  redrawBindings();
+};
+function applySourceName() {
+  const field = byId('source-name');
+  if (field.value === BindingBackup.name(draft, selectedSource)) return;
+  try {
+    BindingBackup.setName(draft, selectedSource, field.value.trim());
+    label('source-note', 'Button name updated. Save to apply.');
+  } catch (error) {
+    label('source-note', error.message);
+  }
+  field.value = BindingBackup.name(draft, selectedSource);
+  redrawBindings();
+}
+byId('source-name').onchange = applySourceName;
+byId('apply-source-name').onclick = applySourceName;
+byId('source-name').onkeydown = event => {
+  if (event.key === 'Enter') { event.preventDefault(); applySourceName(); }
+};
+
 names.slice(1).forEach((_, i) => {
   const a = i + 1, row = document.createElement('tr');
   row.dataset.action = String(a);
@@ -388,30 +562,53 @@ names.slice(1).forEach((_, i) => {
   const controls = document.createElement('div');
   controls.className = 'binding-controls';
   const learn = document.createElement('button'), clear = document.createElement('button');
+  const rename = document.createElement('button');
   learn.id = 'learn-' + a;
   clear.id = 'clear-' + a;
+  rename.id = 'rename-' + a;
   learn.textContent = 'Learn';
   clear.textContent = 'Clear';
-  controls.append(learn, clear);
+  rename.textContent = 'Rename';
+  controls.append(learn, clear, rename);
   title.append(name, alternate, controls);
   const physical = document.createElement('td'), bit = document.createElement('td');
   physical.id = 'binding-' + a;
   bit.id = 'bit-' + a;
   row.append(title, physical, bit);
-  learn.onclick=()=>{
+  const travelIndex = travelActions.indexOf(a);
+  function startLearning(travelOnly) {
     if(!latest) return;
     showBindingFeedback(title);
-    learning=a; pull=null;
+    learning=a; renaming=0; pull=null;
     previousMasks=latest.masks.slice(); previousUp=latest.up.slice();
-    const index=travelActions.indexOf(a), h=Math.floor(index/3);
-    if(index>=0 && latest.up[h] && (latest.seen[h]&2)) {
-      pull={hand:h,epoch:latest.epoch[h],rest:travelBytes(latest,h)};
+    const h = Math.floor(travelIndex / 3);
+    if(travelIndex>=0 && latest.up[h] && (latest.seen[h]&2)) {
+      pull={hand:h,epoch:latest.epoch[h],rest:travelBytes(latest,h),travelOnly};
     }
     const output = outputName(a, usbLayout(latest));
-    const prompt=pull ? 'Hold the '+learnTarget(a)+' press. If no click appears, choose Capture held travel.' :
+    const prompt=travelOnly ? 'Hold the '+learnTarget(a)+' at the desired travel, then choose Capture held travel.' :
+      pull ? 'Hold the '+learnTarget(a)+' press. If no click appears, choose Capture held travel.' :
       'Release other controls, then hold the button for '+output+'.';
     bindingNote(prompt);
     redrawBindings();
+  }
+  learn.onclick = () => startLearning(false);
+  if (travelIndex >= 0) {
+    const calibrate = document.createElement('button');
+    calibrate.id = 'calibrate-travel-' + a;
+    calibrate.textContent = 'Calibrate travel';
+    calibrate.setAttribute('aria-label', 'Calibrate ' + learnTarget(a) + ' travel');
+    calibrate.onclick = () => startLearning(true);
+    controls.append(calibrate);
+  }
+  rename.onclick = () => {
+    endBinding();
+    showBindingFeedback(title);
+    renaming = a;
+    byId('binding-name').value = BindingBackup.name(draft, 37 + a);
+    bindingNote('Leave the name empty to use ' + (pro3RowTitles[a] || pro3Name(a)) + '.');
+    redrawBindings();
+    byId('binding-name').focus({preventScroll:true});
   };
   clear.onclick=()=>{
     showBindingFeedback(title);
@@ -425,6 +622,19 @@ names.slice(1).forEach((_, i) => {
   };
   byId('bindings').append(row);
 });
+byId('apply-name').onclick = () => {
+  if (!renaming) return;
+  try {
+    BindingBackup.setName(draft, 37 + renaming, byId('binding-name').value.trim());
+    endBinding('Output name updated. Save to apply.');
+  } catch (error) {
+    bindingNote(error.message);
+  }
+  redrawBindings();
+};
+byId('binding-name').onkeydown = event => {
+  if (event.key === 'Enter') { event.preventDefault(); byId('apply-name').click(); }
+};
 function travelBytes(state,h) {
   return [14,15].map(i=>parseInt(state.raw[h].slice(i*2,i*2+2),16));
 }
@@ -459,9 +669,10 @@ byId('pull-confirm').onclick=()=>{
   if((current-c.rest)*Math.sign(c.delta)>Math.max(4,Math.abs(c.delta)*.2)) {
     bindingNote('Release to the starting position, then confirm.');return;
   }
-  clearAction(learning);
   const o=travelOffset(travelActions.indexOf(learning));
   draft.set([c.channel,Math.round(c.rest+.35*c.delta),Math.round(c.rest+.65*c.delta)],o);
+  const source = 32 + travelActions.indexOf(learning);
+  BindingBackup.setMask(draft, source, BindingBackup.mask(draft, source) | outputFlag(learning));
   endBinding('Press travel learned. Save to apply.');redrawBindings();
 };
 names.forEach((name,i)=>{
@@ -470,15 +681,50 @@ names.forEach((name,i)=>{
   option.value=String(i); option.textContent=name || 'Off';
   byId('sensor-action').append(option);
 });
+for (const editor of triggerEditors) {
+  const {channel, release, engage, apply, exclusive, offset, click, source, output} = editor;
+  for (const field of [channel, release, engage]) {
+    field.oninput = field.onchange = () => {
+      if (!draft || saving) return;
+      const pending = triggerValuesChanged(editor);
+      editor.note.textContent = pending ? 'Choose Apply values to stage this change.' : '';
+      if (pending) refreshTriggerSettings();
+      else redrawBindings();
+    };
+  }
+  apply.onclick = () => {
+    if (!draft || saving) return;
+    const selected = Number(channel.value);
+    const releaseAt = release.valueAsNumber, engageAt = engage.valueAsNumber;
+    if (selected && (![releaseAt, engageAt].every(n => Number.isInteger(n) && n >= 0 && n <= 255) ||
+        releaseAt === engageAt)) {
+      editor.note.textContent = 'Enter two different whole numbers from 0 to 255.';
+      return;
+    }
+    if (selected && !draft[offset] && !BindingBackup.mask(draft, source))
+      BindingBackup.setMask(draft, source, output);
+    draft.set(selected ? [selected, releaseAt, engageAt] : [0,0,0], offset);
+    editor.note.textContent = selected ? 'Trigger values staged. Save to board to apply.' :
+      'Trigger travel turned off. Save to board to apply.';
+    redrawBindings();
+  };
+  exclusive.onclick = () => {
+    if (!draft?.[offset] || saving || triggerValuesChanged(editor)) return;
+    BindingBackup.setMask(draft, source, BindingBackup.mask(draft, source) | output);
+    BindingBackup.setMask(draft, click, BindingBackup.mask(draft, click) & ~output);
+    editor.note.textContent = 'Trigger output assigned to travel. Save to board to apply.';
+    redrawBindings();
+  };
+}
 triggerSelectors.forEach((id, side) => {
   byId(id).onchange = e => {
-    if (saving || usbLayout(latest) !== 2 || draft?.[0] !== 4) return;
+    if (saving || usbLayout(latest) !== 2 || !(draft?.[0] >= 4)) return;
     draft[BindingBackup.triggerOffset + side] = Number(e.target.value);
     note('Trigger source changed. Save to apply.');
     redrawBindings();
   };
 });
-byId('cancel').onclick=()=>{endBinding('Learning canceled.');redrawBindings();};
+byId('cancel').onclick=()=>{endBinding(renaming ? 'Rename canceled.' : 'Learning canceled.');redrawBindings();};
 byId('defaults').onclick=()=>{draft=defaultProfile.slice();previews=[0,0];stopWizard('Defaults staged. Save to apply.');
   endBinding();note('Defaults restored in this view. Save to apply.');redrawBindings();};
 byId('export').onclick = () => {
@@ -596,7 +842,7 @@ function refreshSurfaceLists() {
     }else{
       const action=draft[offset+4], outputs=[];
       if(action) outputs.push(lastTouchLayout===undefined ? names[action] : outputName(action,lastTouchLayout));
-      if(draft[0]===4){
+      if(draft[0]>=4){
         const source=1+side*12+index;
         for(let trigger=0;trigger<2;trigger++){
           if(draft[BindingBackup.triggerOffset+trigger]===source)
@@ -604,9 +850,9 @@ function refreshSurfaceLists() {
         }
       }
       label(id+'-output', outputs.length ? 'Output · '+outputs.join(' + ') : calibrated ? 'No output assigned' : '');
-      const signal=calibrated ? Touch.source(draft[offset],draft[offset+1])+
+      const signal=calibrated ? Touch.source(draft[offset],draft[offset+1],side)+
         (draft[offset+1]>=3 ? ' · on/off' : ' · engage '+draft[offset+3]+' / release '+draft[offset+2])
-        : 'Uncalibrated';
+        : (side===1 && index===7 ? '0x19 byte 5 · uncalibrated' : 'Uncalibrated');
       label(id+'-signal',signal);
     }
     if(!latest) setSurfaceState(id,draft?'offline':'waiting');
@@ -632,8 +878,8 @@ function refreshSensorEditor() {
     if(document.activeElement!==el) el.value=has?String(draft[o+index]):'';
   }
   byId('dpad-hint').hidden=hand!==0 || slot!==0;
-  label('sensor-source',has ? Touch.source(draft[o],draft[o+1])+
-    (draft[o+1]>=3?' · on/off signal':' · adjustable sensitivity') : 'No learned signal');
+  label('sensor-source',has ? Touch.source(draft[o],draft[o+1],hand)+
+    (draft[o+1]>=3?' · on/off signal':' · adjustable sensitivity') : (hand===1 && slot===7 ? 'Right Steam · 0x19 byte 5 · uncalibrated' : 'No learned signal'));
   byId('wizard').hidden=!wizard;
   byId('candidates').hidden=!alternatives.length;
   byId('use-candidate').disabled=locked || !latest?.up[hand];
@@ -679,7 +925,7 @@ function sampleGesture(state,observation) {
       list.replaceChildren();
       alternatives.forEach((v,i)=>{
         const option=document.createElement('option');
-        option.value=String(i);option.textContent=Touch.source(v.channel,v.mode);list.append(option);
+        option.value=String(i);option.textContent=Touch.source(v.channel,v.mode,hand);list.append(option);
       });
       list.value='0';
     } else stageSensor(found);
@@ -749,7 +995,7 @@ byId('stop-capture').onclick=()=>{stopWizard('Capture canceled.');redrawBindings
 byId('sensor-clear').onclick=()=>{
   alternatives=[]; draft.set([Touch.empty,0,0,0,0],bindOffset());previews[hand]&=~(1<<slot);
   const removed = [];
-  if (draft[0] === 4) {
+  if (draft[0] >= 4) {
     const source = 1 + hand * 12 + slot;
     triggerSelectors.forEach((_, side) => {
       const offset = BindingBackup.triggerOffset + side;

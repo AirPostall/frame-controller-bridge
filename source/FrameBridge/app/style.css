@@ -18,7 +18,25 @@ select{font:inherit;border:1px solid var(--rule);border-radius:8px;padding:8px 1
 #binding-message{margin:0}
 #binding-feedback button,#binding-feedback select{max-width:100%;margin:5px 0 0;padding:4px 8px;min-height:32px;font-size:13px}
 #pull-tools{display:flex;flex-wrap:wrap;gap:4px}
+.source-editor{padding:14px 18px;border:1px solid var(--rule);border-radius:14px;background:white}
+.source-editor summary{cursor:pointer;font-weight:650}
+.source-fields{display:grid;grid-template-columns:max-content minmax(0,22rem);align-items:center;gap:8px 14px;margin:12px 0}
+.source-fields select,.source-fields input,#output-rename input{margin:0;width:100%;min-width:0}
+.source-name-controls{display:flex;align-items:center;gap:6px}
+.source-name-controls button{flex:none}
+.source-fields input,#output-rename input{border:1px solid var(--rule);border-radius:8px;padding:8px 10px;font:inherit;color:var(--ink)}
+#source-outputs{margin:12px 0 0;padding:8px 0 0;border:0}
+#source-outputs legend{font-weight:600}
+#output-choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:4px}
+#output-choices label{display:flex;align-items:center;gap:6px;min-height:32px;overflow-wrap:anywhere}
+#source-note{margin:8px 0 0}
+#output-rename label{display:block;margin:6px 0 2px}
 .bindings td:last-child{font:13px/1.5 ui-monospace,monospace}
+.trigger-settings fieldset{min-width:0;margin:0;padding:12px;border:1px solid var(--rule);border-radius:8px}
+.trigger-settings legend{padding:0 4px;font-weight:650}
+.trigger-settings label{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0}
+.trigger-settings input{width:5em;padding:6px;border:1px solid var(--rule);border-radius:6px;font:inherit}
+.trigger-settings p:empty{display:none}
 
 /* Live and Touch inventories share one hand per column at tablet widths. */
 .live-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
@@ -46,6 +64,7 @@ select{font:inherit;border:1px solid var(--rule);border-radius:8px;padding:8px 1
 .touch-editor{scroll-margin:12px}
 select:focus-visible{outline:3px solid #639924;outline-offset:2px}
 @media(max-width:580px){
+  .source-fields{grid-template-columns:minmax(0,1fr)}
   .bindings th,.bindings td{padding:9px 6px;font-size:13px}
   .binding-controls button{padding:4px 7px}
   .live-groups{grid-template-columns:1fr;gap:4px}

@@ -4,7 +4,7 @@ const Touch = (() => {
     ['D-pad','Grab','Trigger','Joystick','Steam','View','Bumper','Grip · ring','Grip · little'],
     ['A','B','X','Y','Grab','Trigger','Joystick','Steam','Menu','Bumper','Grip · ring','Grip · little']
   ];
-  const size = 174, empty = 255;
+  const empty = 255;
   const offset = (hand, slot) => 34 + (hand * 12 + slot) * 5;
   const mask = mode => [255, 15, 240][mode] ?? (1 << (mode - 3));
   function value(raw, mode) {
@@ -13,11 +13,11 @@ const Touch = (() => {
     if (mode === 2) return (raw >> 4) * 17;
     return raw & mask(mode) ? 255 : 0;
   }
-  function source(channel, mode) {
+  function source(channel, mode, hand) {
     const block=channel<14?'0x19':'0x14';
     const byte=channel<14?channel:[6,7,0,1][channel-14];
     const part=mode===0?'':mode===1?' low nibble':mode===2?' high nibble':' bit '+(mode-3);
-    return block+' byte '+byte+part;
+    return block+' byte '+byte+part+(hand===1 && channel===5?' · Right Steam':'');
   }
   function overlap(a,b) { return a.channel===b.channel && !!(mask(a.mode)&mask(b.mode)); }
 
@@ -40,7 +40,10 @@ const Touch = (() => {
   }
   function learn(phases, hand, slot, profile) {
     const candidates=[];
+    const current=offset(hand,slot);
     for(let channel=0;channel<18;channel++) {
+      // Channel 5 on the right hand follows Steam. Honor older calibrations that used it.
+      if(hand===1 && channel===5 && slot!==7 && profile[current]!==5) continue;
       if(phases.some(phase=>!phase.length || phase.some(s=>!(s.seen & (channel<14?1:2))))) continue;
       const all=phases.flat().map(s=>s.raw[channel]);
       const variation=all.reduce((m,v)=>m|(v^all[0]),0);
@@ -55,7 +58,7 @@ const Touch = (() => {
         if(channel>=16) {
           if(mode<3) continue;
           const bit=8*(channel-16)+mode-3;
-          if(defaultClick(hand,bit) || profile[2+hand*16+bit]) continue;
+          if(defaultClick(bit) || BindingBackup.mask(profile,hand*16+bit)) continue;
         }
         const item=candidate(phases,channel,mode);
         if(item) candidates.push(item);
@@ -73,9 +76,12 @@ const Touch = (() => {
       return '';
     };
     // A previous calibration (including right A) can disambiguate a mirrored field.
-    const current=offset(hand,slot);
     const existing=nearby.find(c=>c.channel===profile[current] && c.mode===profile[current+1]);
     if(existing && !matches(existing)) return existing;
+    if(hand===1 && slot===7) {
+      const steam=nearby.find(c=>c.channel===5 && !matches(c));
+      if(steam) return steam;
+    }
     const distinct=[];
     for(const c of nearby) if(!distinct.some(d=>overlap(c,d))) distinct.push(c);
     if(distinct.length>1) {
@@ -86,13 +92,13 @@ const Touch = (() => {
     if(used) return {error:'That signal is already assigned to '+used+'. Isolate the two controls and try again.'};
     return best;
   }
-  function defaultClick(hand, bit) {
-    return bit<=3 || bit===5 || bit===6 || bit===9 || bit===8;
+  function defaultClick(bit) {
+    return bit<=3 || (bit>=5 && bit<=9);
   }
   function latch(raw, mode, off, on, active) {
     const v=value(raw,mode);
     if(on>off) return v>=on || (active && v>off);
     return v<=on || (active && v<off);
   }
-  return {slots,size,empty,offset,mask,value,source,learn,latch};
+  return {slots,empty,offset,mask,value,source,learn,latch};
 })();

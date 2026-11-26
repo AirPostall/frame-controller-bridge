@@ -1,9 +1,10 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const Touch = vm.runInNewContext(fs.readFileSync(__dirname+'/../app/touch.js','utf8')+'\nTouch;');
-const defaults = new Uint8Array(Touch.size);
-defaults[0]=4;
+const BindingBackup = require('../app/backup.js');
+const Touch = vm.runInNewContext(fs.readFileSync(__dirname+'/../app/touch.js','utf8')+'\nTouch;', {BindingBackup});
+const defaults = new Uint8Array(BindingBackup.size(5));
+defaults[0]=5;
 for(let i=34;i<154;i+=5) defaults[i]=Touch.empty;
 function capture(make, seen=3) {
   return Array.from({length:5},(_,phase)=>Array.from({length:5},(_,sample)=>{
@@ -37,6 +38,16 @@ assert.match(Touch.learn(capture((r,on,i,phase)=>{r[6]=phase===1?150:30;}),0,1,p
 assert.match(Touch.learn(capture((r,on)=>{r[16]=on?1:0;}),1,0,p).error,/No repeatable/);
 assert.match(Touch.learn(capture((r,on)=>{r[0]=on?180:10;},2),0,1,p).error,/No repeatable/);
 assert.equal(Touch.learn(analog,0,1,p).channel,4);
+const steam=capture((r,on)=>{r[5]=r[2]=on?190:10;});
+assert.equal(Touch.learn(steam,1,7,p).channel,5);
+assert.equal(Touch.learn(steam,1,1,p).channel,2);
+assert.match(Touch.source(5,0,1),/0x19 byte 5 · Right Steam/);
+assert.doesNotMatch(Touch.source(5,0,0),/Steam/);
+const triggerClick=capture((r,on)=>{r[16]=on?128:0;});
+assert.match(Touch.learn(triggerClick,0,2,p).error,/No repeatable/);
+const extraClick=capture((r,on)=>{r[17]=on?8:0;});
+BindingBackup.setMask(p,16+11,1<<21);
+assert.match(Touch.learn(extraClick,1,4,p).error,/No repeatable/);
 assert.equal(Touch.slots[0].length,9);
 assert.equal(Touch.slots[1].length,12);
 assert.ok(Touch.latch(120,0,100,150,true));

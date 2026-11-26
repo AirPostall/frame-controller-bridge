@@ -73,25 +73,35 @@ function fixtureDocument() {
 }
 
 async function testUI(document, EventType = Event) {
-  const profile = new Uint8Array(174);
-  profile[0] = 4;
+  const profile = new Uint8Array(1728);
+  profile[0] = 5;
   for (let offset = 34; offset < 154; offset += 5) profile[offset] = 255;
-  profile[2 + 5] = profile[2 + 6] = 5;   // Two left buttons assigned to L1.
-  profile[18] = 1;                       // Right bit 0 (A) assigned to A.
+  function readMask(bytes, source) {
+    const i = 174 + source * 3;
+    return bytes[i] | bytes[i+1] << 8 | bytes[i+2] << 16;
+  }
+  function outputs(...actions) {
+    return actions.reduce((bits, action) => bits | 1 << (action - 1), 0);
+  }
+  for (const [source, action] of [[5,5],[6,5],[7,16],[16,1],[23,17],[24,20],[33,18]]) {
+    const mask = outputs(action);
+    profile.set([mask & 255, (mask >> 8) & 255, mask >> 16], 174 + source * 3);
+  }
   profile.set([2,30,70], 157);           // Left grab on press travel byte 7.
   profile.set([10,0,20,120,2], 94);      // Right A touch assigned to B and L2.
   profile[172] = 13;
   let boardProfile = profile.slice(), online = true;
   const writes = [], raw = [Buffer.alloc(18), Buffer.alloc(18)];
+  raw[1][5] = 81;
   raw[1][10] = 70;
   const state = {
     up:[1,1], epoch:[1,1], seen:[3,3], masks:[32,1], travel:[2,0], active:[0,0],
     packets:[50,60], axes:[[0,0],[0,0]], usb:1, usbLayout:2, standardUsb:0,
-    touch:70, buttons:1 | 1<<4 | 1<<13, triggers:[128,0], hat:8, bad:0, overflows:0,
+    buttons:1 | 1<<4 | 1<<13, triggers:[128,0], hat:8, bad:0, overflows:0,
   };
   const timers = new Map();
   let timerID = 0;
-  const sandbox = vm.createContext({document, AbortController,
+  const board = {AbortController, TextEncoder, TextDecoder,
     setTimeout(fn, delay) { timers.set(++timerID, {fn, delay}); return timerID; },
     clearTimeout(id) { timers.delete(id); },
     async fetch(url, {method = 'GET', body} = {}) {
@@ -106,10 +116,14 @@ async function testUI(document, EventType = Event) {
       }
       throw Error('Unexpected request ' + method + ' ' + url);
     },
-  });
-  for (const [, src] of html.matchAll(/<script\b[^>]*\bsrc="\/([^"]+)"/g)) {
-    await vm.runInContext(fs.readFileSync(path.join(app, src), 'utf8'), sandbox, {filename:src});
+  };
+  async function loadPage() {
+    const sandbox = vm.createContext({...board, document});
+    for (const [, src] of html.matchAll(/<script\b[^>]*\bsrc="\/([^"]+)"/g)) {
+      await vm.runInContext(fs.readFileSync(path.join(app, src), 'utf8'), sandbox, {filename:src});
+    }
   }
+  await loadPage();
   const el = id => { const node = document.getElementById(id); assert.ok(node, id); return node; };
   const content = id => el(id).textContent;
   const click = id => { assert.ok(!el(id).disabled, id + ' is disabled'); el(id).click(); };
@@ -117,15 +131,24 @@ async function testUI(document, EventType = Event) {
     assert.ok(!el(id).disabled, id + ' is disabled'); el(id).value = String(value);
     el(id).dispatchEvent(new EventType('change'));
   };
+  const check = (id, checked) => {
+    assert.ok(!el(id).disabled, id + ' is disabled');
+    el(id).checked = checked;
+    el(id).dispatchEvent(new EventType('change'));
+  };
   async function poll() {
     const next = [...timers].find(([, timer]) => timer.delay < 2500);
     assert.ok(next, 'Board polling stopped');
     timers.delete(next[0]); await next[1].fn();
   }
-  function live(side, kind, index) {
+  function liveRow(side, kind, index) {
     const row = [...el('live-' + side + '-bindings').children].find(
       n => n.dataset.kind === kind && n.dataset.index === String(index));
     assert.ok(row, side + ' ' + kind + ' ' + index);
+    return row;
+  }
+  function live(side, kind, index) {
+    const row = liveRow(side, kind, index);
     return {output:row.children[1].textContent, state:row.dataset.state, status:row.children[2].textContent};
   }
   function tab(button, section) {
@@ -167,6 +190,10 @@ async function testUI(document, EventType = Event) {
   }
 
   assert.equal(content('network'), 'Board connected');
+  assert.equal(document.getElementById('touch'), null);
+  assert.doesNotMatch(content('live'), /A contact/);
+  assert.match(content('live'), /Right Steam.*0x19 byte 5/);
+  assert.match(content('right-steam-level'), /\b81\b/);
   assert.equal(live('left','click',5).state, 'pressed');
   assert.equal(live('left','click',6).state, 'released');
   assert.deepEqual(live('left','travel',1), {output:'PL', state:'pressed', status:'Pressed'});
@@ -175,6 +202,7 @@ async function testUI(document, EventType = Event) {
   state.seen[0] = 1; state.up[1] = 0; await poll();
   assert.equal(live('left','travel',1).state, 'waiting');
   assert.equal(live('right','click',0).state, 'offline');
+  assert.doesNotMatch(content('right-steam-level'), /\b81\b/);
   state.seen[0] = 3; state.up[1] = 1; state.masks[1] = 0; await poll();
 
   tab('map-tab','mapping');
@@ -184,6 +212,9 @@ async function testUI(document, EventType = Event) {
   assert.equal(tbody.children.length, 22);
   for (const row of tbody.children) assert.deepEqual([...row.children].map(c => c.tagName), ['TH','TD','TD']);
   assert.equal(content('action-5'), 'L1');
+  assert.match(content('binding-16'), /L2/);
+  assert.match(content('binding-17'), /R2/);
+  assert.match(content('binding-20'), /Right Steam/i);
   assert.deepEqual([...el('binding-5').children].map(n => n.textContent), ['Left bumper', 'Left stick click']);
   assert.deepEqual([...el('bit-5').children].map(n => n.textContent), ['Left bit 5', 'Left bit 6']);
   assert.equal(content('bit-18'), 'Left travel · 0x14 byte 7');
@@ -197,6 +228,9 @@ async function testUI(document, EventType = Event) {
   assert.ok(![...el('action-2').parentElement.children].includes(el('binding-feedback')));
   assert.ok(!el('pull-tools').hidden && !el('pull-capture').hidden);
   click('pull-capture'); rowFeedback(16, /no clear press travel/i);
+  // Explicit travel calibration must ignore the simultaneous physical L2 click.
+  click('calibrate-travel-16');
+  state.masks[0] |= 1 << 7;
   raw[0][14] = 140; raw[0][15] = 105; await poll();
   click('pull-capture'); rowFeedback(16, /two.*fields|choose.*field/i);
   assert.ok(!el('pull-channel').hidden && !el('pull-confirm').hidden);
@@ -205,7 +239,8 @@ async function testUI(document, EventType = Event) {
   raw[0][14] = raw[0][15] = 0; await poll();
   click('pull-confirm'); rowFeedback(16, /travel learned/i);
   assert.ok(el('cancel').hidden && el('pull-tools').hidden);
-  assert.equal(content('bit-16'), 'Left travel · 0x14 byte 7');
+  assert.match(content('bit-16'), /Left bit 7/);
+  assert.match(content('bit-16'), /Left travel · 0x14 byte 7/);
 
   learn(2); click('cancel'); rowFeedback(2, /cancel/i);
   assert.ok(el('cancel').hidden);
@@ -216,7 +251,22 @@ async function testUI(document, EventType = Event) {
   learn(21); state.masks[1] = 1; await poll();
   rowFeedback(21, /Right bit 0.*L4/);
   assert.deepEqual(['action-21','binding-21','bit-21'].map(content), ['L4','Right A','Right bit 0']);
-  assert.equal(content('binding-1'), 'Unbound');
+  assert.equal(content('binding-1'), 'Right A', 'A second output must preserve the first');
+  state.masks[1] = 0; await poll();
+  learn(21); state.masks[1] = 2; await poll();
+  assert.match(content('binding-21'), /Right A.*Right B/);
+  change('binding-source',17);
+  assert.equal(el('source-output-21').checked, true);
+  check('source-output-4',true);
+  check('source-output-21',false);
+  assert.equal(content('binding-21'), 'Right A', 'Removing a link must preserve other sources');
+  assert.equal(content('binding-4'), 'Right B');
+  change('binding-source',16);
+  assert.ok(el('source-output-1').checked && el('source-output-21').checked);
+  change('source-name','Jump paddle');
+  assert.match(content('binding-1'), /Jump paddle/);
+  click('rename-21'); el('binding-name').value = 'Boost'; click('apply-name');
+  assert.match(content('action-21'), /Boost/);
   assert.equal(content('dirty'), 'Unsaved changes');
 
   learn(2); rowFeedback(2, /hold.*B/i);
@@ -226,9 +276,28 @@ async function testUI(document, EventType = Event) {
   tab('map-tab','mapping'); noRowPrompt();
   assert.equal(content('bit-2'), '—', 'Leaving the tab must cancel a pending Learn');
 
+  change('trigger-right-channel',2);
+  change('trigger-right-engage',45);
+  change('trigger-right-release',150);
+  click('trigger-right-apply');
+  assert.match(content('bit-17'), /Right bit 7/);
+  assert.match(content('bit-17'), /Right travel · 0x14 byte 7/);
+  change('trigger-right-engage',150);
+  click('trigger-right-apply');
+  assert.match(content('trigger-right-note'), /differ|distinct|equal|separat/i);
+  change('trigger-right-engage',45);
+  assert.ok(el('trigger-right-apply').disabled, 'Rejected thresholds must leave the staged values intact');
+  change('binding-source',23);
+  check('source-output-4',true);
+  click('trigger-right-exclusive');
+  assert.doesNotMatch(content('bit-17'), /Right bit 7/);
+  assert.match(content('bit-17'), /Right travel · 0x14 byte 7/);
+  assert.match(content('bit-4'), /Right bit 7/);
+
   tab('sensors-tab','sensors');
   assert.equal(el('touch-left-list').children.length, 9);
   assert.equal(el('touch-right-list').children.length, 12);
+  assert.match(content('surface-1-7-signal'), /0x19 byte 5.*uncalibrated/i);
   click('surface-1-0'); assert.equal(document.activeElement, el('sensor-heading'));
   assert.equal(content('sensor-heading'), 'Right hand · A');
   assert.match(content('surface-1-0-output'), /B.*L2 \(analog\)/);
@@ -264,12 +333,42 @@ async function testUI(document, EventType = Event) {
   assert.match(content('message'), /saved to board/i);
   noRowPrompt();
   assert.equal(writes.length, 1);
-  assert.equal(boardProfile[18], 21);
+  assert.equal(readMask(boardProfile,16), outputs(1,21));
+  assert.equal(readMask(boardProfile,17), outputs(4));
+  assert.equal(readMask(boardProfile,7), 0);
+  assert.equal(readMask(boardProfile,32), 0);
+  assert.equal(boardProfile[154], 2, 'Removing a route preserves its travel calibration');
+  assert.deepEqual([...boardProfile.slice(163,166)], [2,150,45]);
+  assert.equal(readMask(boardProfile,35), outputs(17));
+  assert.equal(readMask(boardProfile,23), outputs(4));
   assert.equal(boardProfile[97], 140);
   assert.deepEqual([boardProfile[74], boardProfile[78]], [8,17]);
   assert.equal(content('dirty'), 'On board');
-  tab('live-tab','live'); assert.equal(live('right','click',0).output, 'L4');
+  timers.clear();
+  document = fixtureDocument(); await loadPage();
+  assert.equal(content('network'), 'Board connected');
+  assert.match(live('right','click',0).output, /A.*Boost/);
+  assert.match(liveRow('right','click',0).children[0].textContent, /Jump paddle/);
+  assert.equal(live('right','click',1).output, 'Y');
   assert.equal(live('left','touch',8).output, 'R2');
+  tab('map-tab','mapping');
+  assert.equal(el('trigger-right-engage').value, '45');
+  assert.equal(el('trigger-right-release').value, '150');
+  state.usbLayout = 1;
+  raw[1][14] = 62; raw[1][15] = 141; await poll();
+  assert.ok(!el('trigger-settings').hidden, 'Trigger travel must also be configurable in Standard USB mode');
+  assert.match(content('trigger-right-levels'), /Byte 6.*62.*Byte 7.*141/);
+  assert.ok(el('analog-routing').hidden);
+  change('binding-source',16);
+  assert.equal(el('source-name').value, 'Jump paddle');
+  assert.ok(el('source-output-1').checked && el('source-output-21').checked);
+  state.up[1] = 0; await poll();
+  assert.match(content('trigger-right-levels'), /offline/i);
+  change('trigger-right-channel',0); click('trigger-right-apply');
+  click('save'); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual([...boardProfile.slice(163,166)], [0,0,0]);
+  assert.equal(readMask(boardProfile,35), outputs(17), 'Turning travel off preserves its output for recalibration');
+  assert.equal(readMask(boardProfile,23), outputs(4));
 }
 
 module.exports = {html, testUI};

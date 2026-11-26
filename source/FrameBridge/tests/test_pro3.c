@@ -20,7 +20,8 @@ int main(void)
     hand_state hands[HAND_COUNT] = {
         {.x = -16384, .y = INT16_MIN}, {.x = 16384, .y = INT16_MAX}
     };
-    pad_profile profile = pad_defaults();
+    pad_profile profile;
+    pad_defaults(&profile);
     profile.stick_flags = 3;
     pad_report r = pad_compose(hands, &profile);
     check_packet(&r, (uint8_t[PRO3_INPUT_PAYLOAD_SIZE]){8, 63, 255, 191, 0});

@@ -8,7 +8,9 @@ enum { UNBOUND, PAD_A, PAD_B, PAD_X, PAD_Y, PAD_LB, PAD_RB, PAD_SELECT, PAD_STAR
        PAD_L3, PAD_R3, PAD_HOME, PAD_UP, PAD_RIGHT, PAD_DOWN, PAD_LEFT,
        PAD_LT, PAD_RT, PAD_L_GRAB, PAD_R_GRAB, PAD_R_STEAM, PAD_L_GRAB_FULL, PAD_R_GRAB_FULL, ACTION_COUNT };
 enum { CONTACT_BYTES = 14, RAW_CHANNELS = 18, TOUCH_SLOTS = 12, LEFT_TOUCH_SLOTS = 9, NO_CHANNEL = 255,
-       TRAVEL_SLOTS = 3, LEGACY_PROFILE_BYTES = 174, V3_PROFILE_BYTES = 172, PROFILE_VERSION = 4 };
+       TRAVEL_SLOTS = 3, LEGACY_PROFILE_BYTES = 174, V3_PROFILE_BYTES = 172, V4_PROFILE_BYTES = 174,
+       CLICK_SOURCES = HAND_COUNT * 16, PRESS_SOURCES = CLICK_SOURCES + HAND_COUNT * TRAVEL_SLOTS,
+       NAME_SLOTS = PRESS_SOURCES + ACTION_COUNT - 1, NAME_BYTES = 24, PROFILE_VERSION = 5 };
 enum { WHOLE_BYTE, LOW_NIBBLE, HIGH_NIBBLE, BIT_ZERO, BIT_SEVEN = BIT_ZERO + 7 };
 
 typedef struct {
@@ -29,11 +31,15 @@ typedef struct { uint8_t channel, release, engage; } press_binding;
 
 typedef struct {
     uint8_t version, stick_flags;
-    uint8_t binding[HAND_COUNT][16];
+    uint8_t reserved[CLICK_SOURCES]; // V1–V4 stored one action per click here.
     touch_binding touch[HAND_COUNT][TOUCH_SLOTS];
     press_binding travel[HAND_COUNT][TRAVEL_SLOTS];
     // LT/RT each optionally read touch slot 1 + hand * TOUCH_SLOTS + slot; zero uses digital only.
     uint8_t trigger_source[2];
+    // Clicks first, then travel; each group is hand-major. Bit (action - 1) enables an output.
+    uint8_t outputs[PRESS_SOURCES][3];
+    // UTF-8, NUL-terminated and padded. Press source aliases precede output aliases A..R4.
+    uint8_t names[NAME_SLOTS][NAME_BYTES];
 } pad_profile;
 
 typedef struct {
@@ -41,7 +47,7 @@ typedef struct {
     uint8_t trigger_level[2];  // Pro 3 analog triggers, in LT/RT order.
 } pad_report;
 
-pad_profile pad_defaults(void);
+void pad_defaults(pad_profile *profile);
 bool pad_profile_valid(const pad_profile *profile);
 bool pad_profile_load(pad_profile *out, const uint8_t *bytes, size_t length);
 bool pad_decode(hand_state *state, const uint8_t *bytes, size_t length);
