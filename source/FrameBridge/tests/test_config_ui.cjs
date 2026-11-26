@@ -96,7 +96,7 @@ async function testUI(document, EventType = Event) {
   raw[1][10] = 70;
   const state = {
     up:[1,1], epoch:[1,1], seen:[3,3], masks:[32,1], travel:[2,0], active:[0,0],
-    packets:[50,60], axes:[[0,0],[0,0]], usb:1, usbLayout:2, standardUsb:0,
+    packets:[50,60], axes:[[0,0],[0,0]], usb:1, bluetoothMode:0, bluetooth:0, usbLayout:2, standardUsb:0,
     buttons:1 | 1<<4 | 1<<13, triggers:[128,0], hat:8, bad:0, overflows:0,
   };
   const timers = new Map();
@@ -190,6 +190,29 @@ async function testUI(document, EventType = Event) {
   }
 
   assert.equal(content('network'), 'Board connected');
+  assert.equal(content('output-hosts'), 'USB ready');
+  assert.match(content('bluetooth-status'), /output is off/);
+  assert.match(content('live'), /Hold BOOT for at least 3 seconds/);
+  assert.match(content('live'), /return to USB/);
+  assert.match(content('live'), /FrameBridge Gamepad/);
+  state.usb = 0; await poll();
+  assert.equal(content('output-hosts'), 'USB · waiting for host');
+  state.usb = 1; state.bluetoothMode = 1;
+  for (const [mode, message] of [[1,/Pairing window open/],[0,/Pairing window closed/],[2,/reconnect/],[3,/enable gamepad/],[4,/ready/]]) {
+    state.bluetooth = mode; await poll();
+    assert.match(content('bluetooth-status'), message);
+    assert.equal(content('output-hosts'), mode === 4 ? 'Bluetooth ready' : 'Bluetooth · waiting for host');
+    assert.match(content('host-check'), /Input is routed to Bluetooth/);
+  }
+  state.usb = 0; await poll();
+  assert.match(content('host-check'), /No USB gamepad host/);
+  assert.equal(content('output-hosts'), 'Bluetooth ready');
+  state.usb = 1; state.bluetoothMode = 0; await poll();
+  assert.equal(content('output-hosts'), 'USB ready');
+  assert.match(content('bluetooth-status'), /output is off/);
+  state.bluetooth = 0; state.bluetoothOverflows = 2; await poll();
+  assert.match(content('diagnostic'), /2 Bluetooth queue overflows/);
+  state.bluetoothOverflows = 0;
   assert.equal(document.getElementById('touch'), null);
   assert.doesNotMatch(content('live'), /A contact/);
   assert.match(content('live'), /Right Steam.*0x19 byte 5/);
@@ -323,6 +346,8 @@ async function testUI(document, EventType = Event) {
 
   online = false; await poll();
   assert.equal(content('network'), 'Board disconnected');
+  assert.equal(content('bluetooth-status'), 'Waiting for board');
+  assert.equal(content('output-hosts'), 'Waiting for board');
   assert.equal(el('surface-0-8').dataset.state, 'offline');
   assert.equal(el('save').disabled, true);
   tab('live-tab','live'); assert.equal(live('right','analog',0).state, 'offline');
@@ -358,7 +383,16 @@ async function testUI(document, EventType = Event) {
   raw[1][14] = 62; raw[1][15] = 141; await poll();
   assert.ok(!el('trigger-settings').hidden, 'Trigger travel must also be configurable in Standard USB mode');
   assert.match(content('trigger-right-levels'), /Byte 6.*62.*Byte 7.*141/);
-  assert.ok(el('analog-routing').hidden);
+  assert.ok(!el('analog-routing').hidden, 'Bluetooth supports analog triggers with Standard USB selected');
+  assert.ok(el('trigger-levels').hidden, 'Standard USB has no analog trigger report');
+  state.bluetoothMode = 1; state.bluetooth = 4; await poll();
+  tab('live-tab','live');
+  assert.equal(content('output-hosts'), 'Bluetooth ready');
+  assert.match(content('trigger-levels'), /Left trigger/);
+  assert.equal(live('right','analog',0).output, 'L2 level');
+  tab('map-tab','mapping');
+  change('rt-source',13);
+  assert.equal(el('rt-source').value, '13');
   change('binding-source',16);
   assert.equal(el('source-name').value, 'Jump paddle');
   assert.ok(el('source-output-1').checked && el('source-output-21').checked);

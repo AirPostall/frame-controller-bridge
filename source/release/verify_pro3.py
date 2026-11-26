@@ -1,4 +1,4 @@
-"""Verify an ESP32-S3 release's wired Pro 3 descriptors against this Mac's Apple mapping.
+"""Verify an ESP32-S3 release's USB and optional Bluetooth Pro 3 inputs against this Mac's mappings.
 
 Use the ESP-IDF Python environment (pyelftools) and supply the build's ELF and app bin.
 This is an offline consistency check. It requires no connected controller.
@@ -101,12 +101,12 @@ def input_fields(report):
     return fields, offsets
 
 
-def check_apple_mapping(bundle, device, fields):
+def check_apple_mapping(bundle, transport, identity, fields):
     with (bundle / 'Info.plist').open('rb') as f:
         devices = plistlib.load(f)['Devices']
-    entry = next(d for d in devices if d['Identifier'] == 'com.8BitDo.Pro3.USB')
-    ids = dict(zip(('VendorID', 'ProductID', 'VersionNumber'), struct.unpack_from('<HHH', device, 8)))
-    require(entry['IOPropertyMatch'] == ids, f'Apple USB identity mismatch: {ids}')
+    entry = next(d for d in devices if d['Identifier'] == 'com.8BitDo.Pro3.' + transport)
+    ids = dict(zip(('VendorID', 'ProductID', 'VersionNumber'), identity))
+    require(entry['IOPropertyMatch'] == ids, f'Apple {transport} identity mismatch: {ids}')
     require(entry['Personalities'][0].endswith('/WithBackButtons.plist'), 'Expanded personality order changed')
     with (bundle / entry['Personalities'][0]).open('rb') as f:
         personality = plistlib.load(f)
@@ -125,6 +125,9 @@ def check_apple_mapping(bundle, device, fields):
     # produced by FrameBridge. Constant padding or a missing intermediate control
     # must not silently shift the remaining controls onto the wrong mapping.
     expected_usages = {
+        'button.a': (9, 1), 'button.b': (9, 2), 'button.c': (9, 4), 'button.d': (9, 5),
+        'button.l': (9, 7), 'button.r': (9, 8), 'button.select': (9, 11), 'button.start': (9, 12),
+        'button.logo': (9, 13), 'thumbstick.left.button': (9, 14), 'thumbstick.right.button': (9, 15),
         'button.pl': (9, 6), 'button.pr': (9, 3), 'button.l4': (9, 17), 'button.r4': (9, 18),
         'thumbstick.left.x': (1, 0x30), 'thumbstick.left.y': (1, 0x31),
         'thumbstick.right.x': (1, 0x32), 'thumbstick.right.y': (1, 0x35),
@@ -169,6 +172,7 @@ def main():
     parser.add_argument('elf', type=Path)
     parser.add_argument('app', type=Path)
     parser.add_argument('--apple-bundle', type=Path)
+    parser.add_argument('--bluetooth', action='store_true', help='also verify the BLE HID report and PnP ID')
     args = parser.parse_args()
     bundle = args.apple_bundle
     if not bundle:
@@ -188,12 +192,22 @@ def main():
     fields, offsets = input_fields(report)
     for report_id, bits in offsets.items():
         require((bits + 7)//8 + bool(report_id) <= packet_size, 'Input report exceeds the interrupt endpoint')
-    ids, bindings = check_apple_mapping(bundle, device, fields)
+    ids, bindings = check_apple_mapping(bundle, 'USB', struct.unpack_from('<HHH', device, 8), fields)
     print(f"Apple Pro 3 USB match: {ids['VendorID']:04x}:{ids['ProductID']:04x}, revision {ids['VersionNumber']:04x}")
     print(f"{len(bindings)} Apple predicates resolved. Report IDs and payload lengths (bits): {dict(offsets)}")
     for control in ('button.pl', 'button.pr', 'button.l4', 'button.r4', 'button.l2', 'button.r2'):
         page, usage, report_id, bit, width = bindings[control]
         print(f'{control:10}  usage {page:02x}/{usage:02x}  report {report_id}, bit {bit}, width {width}')
+    if args.bluetooth:
+        ble = flash_symbols(args.elf, image, ('ble_pad_pnp_id', 'ble_pad_report_map'))
+        source, vendor, product, revision = struct.unpack('<BHHH', ble['ble_pad_pnp_id'])
+        require(source == 2, 'Expected USB-IF vendor namespace in the BLE Device Information Service')
+        ble_fields, ble_offsets = input_fields(ble['ble_pad_report_map'])
+        require(dict(ble_offsets) == {4: 80}, 'Expected one ten-byte Bluetooth input report with ID 4')
+        _, ble_bindings = check_apple_mapping(bundle, 'Bluetooth', (vendor, product, revision), ble_fields)
+        require(ble_bindings == bindings, 'USB and Bluetooth Pro 3 controls disagree')
+        print(f'Apple Bluetooth match: {vendor:04x}:{product:04x}, revision {revision:04x}; '
+              f'{len(ble_bindings)} controls resolved in the ten-byte report.')
 
 
 if __name__ == '__main__':

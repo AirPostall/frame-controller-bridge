@@ -1,6 +1,6 @@
 # FrameControllerBridge · V5
 
-Use the left and right Steam Frame controllers as one wired USB gamepad. An ESP32-S3 receives each hand over Bluetooth Low Energy (BLE) and sends gamepad input through its native USB port. A browser on the board’s temporary Wi-Fi network lets you learn buttons, calibrate touch sensitivity and save a profile for use with the browser closed.
+Use the left and right Steam Frame controllers as one USB or Bluetooth gamepad. An ESP32-S3 receives both hands over Bluetooth Low Energy (BLE) and starts each session with USB gamepad output selected. Hold **BOOT for at least 3 seconds** to send input exclusively to a Bluetooth host such as an iPad. Hold it again for at least 3 seconds to return to USB. The USB cable can stay connected throughout. A browser on the board’s temporary Wi-Fi network lets you learn buttons, calibrate touch sensitivity and save a profile for use with the browser closed.
 
 The default USB layout targets the **wired 8BitDo Pro 3**. It provides two analog triggers and four extra button outputs, PL, PR, L4 and R4. Apple lists connected gamepads through its Game Controller framework. Recognition of the bridge on a physical Mac or iPad still needs to be verified after flashing. [Check host recognition](#check-host-recognition)
 
@@ -10,7 +10,7 @@ You need an ESP32-S3 board with native USB OTG, at least 2 MB of flash, a USB da
 
 1. Download the project using **Code → Download ZIP** on GitHub and extract it, or clone the repository. Open the bundled [Set-up-controllers.html](Set-up-controllers.html) locally in a current Safari or Chrome browser.
 2. Enter the two distinct BLE addresses in the **Left controller** and **Right controller** fields. Use six pairs of hexadecimal digits separated by colons. If you need to identify the addresses, wake one hand at a time and use a BLE scanner that displays advertised device addresses.
-3. Select **8BitDo Pro 3 · wired compatibility test**. The other available layouts are **Standard · generic HID** and **Extended · original 16-bit sticks**.
+3. Choose the **USB layout** that works with your wired host. The default is **8BitDo Pro 3**. The Bluetooth output uses the Pro 3 control mapping with all three USB layout choices.
 4. Choose **Download paired firmware**. The page creates `frame_bridge-paired.bin` locally. Keep this file with your own setup. It contains the addresses you entered. To switch controller pairs or USB layouts, generate and flash a new application.
 
 ## Flash the ESP32-S3
@@ -50,7 +50,7 @@ Copy your downloaded `frame_bridge-paired.bin` into `firmware`. Keep its filenam
 python -m esptool --chip esp32s3 --port PORT write-flash --flash-mode dio --flash-freq 80m --flash-size 2MB 0x0 bootloader/bootloader.bin 0x8000 partition_table/partition-table.bin 0x10000 frame_bridge-paired.bin
 ```
 
-### Upgrade a board running Frame Bridge V3 or V4
+### Upgrade a board running Frame Bridge V3, V4, or V5
 
 To make a backup first, open the current setup page and choose **Bindings → Export JSON**. Copy your downloaded `frame_bridge-paired.bin` into the `firmware` folder, keeping its filename. From that folder, write just the application at the factory-app offset. This preserves the bootloader, partition table and stored profile.
 
@@ -58,9 +58,9 @@ To make a backup first, open the current setup page and choose **Bindings → Ex
 python -m esptool --chip esp32s3 --port PORT write-flash 0x10000 frame_bridge-paired.bin
 ```
 
-V5 loads saved V3 and V4 profiles, including learned travel thresholds, touch calibrations, and any V4 analog trigger sources. Saving writes a separate V5 settings entry. V3 and V4 JSON backups can also be imported. The new defaults apply to fresh profiles and to **Restore defaults**.
+Version 5.2 uses existing V5 profiles and loads saved V3 and V4 profiles, including learned travel thresholds, touch calibrations, and any V4 analog trigger sources. Saving writes a separate V5 settings entry. V3 and V4 JSON backups can also be imported. The new defaults apply to fresh profiles and to **Restore defaults**.
 
-After either procedure, wait for esptool to finish verifying the image. Tap RESET if the board stays in downloader mode. Connect the board’s **native USB/OTG data port** to the host for gameplay. On boards with separate USB and UART connectors, the UART connector is for programming and serial access.
+After either procedure, wait for esptool to finish verifying the image. Tap RESET if the board stays in downloader mode. For wired gameplay connect the board’s **native USB/OTG data port** to the host. For wireless gameplay either USB connector can supply power on boards that support it. On boards with separate USB and UART connectors, the UART connector is for programming and serial access.
 
 ## Connect the hands and open setup
 
@@ -68,6 +68,17 @@ After either procedure, wait for esptool to finish verifying the image. Tap RESE
 2. With the firmware running, **tap BOOT once**. On a phone or computer, join the board’s `FrameBridge-XXXX` Wi-Fi network with password `frame-setup`. Stay connected if the device reports that the network has no internet.
 3. Open the [board setup page](http://192.168.4.1/). In **Live inputs**, the bound controls are listed by hand, including released buttons. Press, touch or squeeze a control to check its saved assignment. The packet counters and raw stick readings are available on the same tab. A second device can display this page while the USB host runs a game.
 4. When you finish, tap BOOT again to close setup Wi-Fi. It also closes automatically after 30 minutes. Saved mappings run on the board while Wi-Fi is off.
+
+## Pair an iPad over Bluetooth
+
+1. Power the board and let the firmware start. Wake the two Steam Frame controllers as usual.
+2. Hold the board’s **BOOT** button for **at least 3 seconds**, then release it. The bridge switches from USB to Bluetooth output and opens a **2-minute** pairing window. A short tap toggles setup Wi-Fi.
+3. On the iPad, open **Settings → Bluetooth**, select **FrameBridge Gamepad**, and accept the pairing request if shown.
+4. Open a controller-enabled game and press and release **A**. For diagnostics, open **Live inputs** on the board setup page to see the wireless host status. A subscribed host receives both sticks, analog triggers, the D-pad and mapped buttons, including rear buttons in games that support them.
+
+**To return to USB**, hold BOOT again for at least 3 seconds. You can do this while pairing, while connected, or after a timeout. If the wireless host disconnects or the pairing window expires, the bridge stays in Bluetooth mode. To open another pairing window, switch to USB, release BOOT, then hold it again to select Bluetooth.
+
+The board remembers the last paired wireless host across power cycles. After a restart, select Bluetooth mode to reconnect. If the iPad still has an old pairing after the board’s flash was erased, use **Forget This Device** on the iPad, then repeat pairing. A battery percentage shown for the Bluetooth gamepad does not measure either hand’s charge.
 
 ## Bind clicks, grips and sticks
 
@@ -103,12 +114,12 @@ To back up or transfer your setup, choose **Bindings → Export JSON**. The file
 
 ## Check host recognition
 
-**Host configured the USB gamepad** on the setup page means USB enumeration succeeded. To verify that games can receive input, look for a native controller entry and a press/release from that controller. 8BitDo lists wired Pro 3 support for macOS 26 and USB-C iPads running iPadOS 26. The bridge implements gamepad inputs only. [8BitDo Apple compatibility](https://www.8bitdo.com/apple/) · [Apple controller discovery](https://developer.apple.com/documentation/gamecontroller/discovering-game-controllers)
+**Host configured the USB gamepad** on the setup page means USB enumeration succeeded. To verify that games can receive input, look for a native controller entry and a press/release from that controller. 8BitDo lists Bluetooth Pro 3 support on iPadOS 26 and macOS 26, with wired support on USB-C iPads and Macs. The bridge implements a BLE HID gamepad using the Bluetooth identity and input mapping in Apple’s Pro 3 controller database. Physical iPad pairing and gameplay require an on-device test. The bridge implements gamepad inputs only. [8BitDo Apple compatibility](https://www.8bitdo.com/apple/) · [Apple controller discovery](https://developer.apple.com/documentation/gamecontroller/discovering-game-controllers)
 
 | Host | Test |
 | --- | --- |
-| macOS | Check **System Settings → Game Controllers**. With the Swift toolchain installed, run `swift Check-Pro3.swift 60` from the release root. Press and release A on a Frame controller. Look for USB ID `2dc8:6009`, a native controller entry and the input events under that entry. Disconnect other gamepads if names are ambiguous. |
-| iPadOS | Connect the native USB port to an unlocked USB-C iPad with a data cable. In Settings, search for **Game Controller**. Check for an entry, then press and release A in a controller-enabled game. Extra button support varies by game. |
+| macOS | Check **System Settings → Game Controllers**. With the Swift toolchain installed, run `swift Check-Pro3.swift 60` from the release root. Press and release A on a Frame controller. Look for a native controller entry and press/release events under that entry. A wired Pro 3 also shows USB ID `2dc8:6009`. Disconnect other gamepads if names are ambiguous. |
+| iPadOS | Pair **FrameBridge Gamepad** over Bluetooth, or connect the native USB port to an unlocked USB-C iPad with a data cable. In Settings, search for **Game Controller**. Check for an entry, then press and release A in a controller-enabled game. Extra button support varies by game. |
 | Windows | Open `joy.cpl`, select the gamepad and inspect **Properties** while pressing A. The bridge presents a USB HID gamepad. For a Steam title requiring Xbox-style input, enable Steam Input for that game. |
 
 If **Live inputs** reports BLE button changes but the Mac detects zero native controllers, note the checker’s USB line and the layout shown beside **USB host check**. If the board shows **Standard** or **Extended**, repeat pairing and flashing with the **8BitDo Pro 3** layout selected.
@@ -123,7 +134,7 @@ idf.py menuconfig
 idf.py build
 ```
 
-For a personal build, enter both addresses under **Steam Frame controllers** in menuconfig and save before building. Run `idf.py -p PORT flash` from the project directory to flash your configured build.
+If reusing an existing SDK configuration from V5.0 or earlier, enable NimBLE bond persistence and set its maximum simultaneous connections to at least three. Fresh builds use these defaults. For a personal build, enter both addresses under **Steam Frame controllers** in menuconfig and save before building. Run `idf.py -p PORT flash` from the project directory to flash your configured build.
 
 To generate a portable unpaired setup page, leave both address defaults at zero, build, and run the following command in the same ESP-IDF terminal. Open the resulting HTML, enter your controller addresses, and use the paired application in the flashing procedure above. For a fresh board, copy the paired image into the matching `build` directory and run the fresh-board command there.
 
@@ -131,4 +142,4 @@ To generate a portable unpaired setup page, leave both address defaults at zero,
 python ../release/make_setup.py build/frame_bridge.bin ../../Set-up-controllers.html
 ```
 
-The [source tests](source/FrameBridge/tests) cover report decoding and encoding, touch learning, and profile backups. On macOS, run `python ../release/verify_pro3.py build/frame_bridge.elf build/frame_bridge.bin` from the ESP-IDF project directory to compare the compiled Pro 3 layout with the installed Apple mapping. Use the host test above to verify physical recognition and input.
+The [source tests](source/FrameBridge/tests) cover report decoding and encoding, touch learning, and profile backups. On macOS, run `python ../release/verify_pro3.py --bluetooth build/frame_bridge.elf build/frame_bridge.bin` from the ESP-IDF project directory to compare both compiled Pro 3 identities and input reports with the installed Apple mappings. Use the host test above to verify physical recognition and input.

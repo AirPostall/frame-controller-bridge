@@ -25,6 +25,17 @@ const label = (id, value) => { const el=byId(id); if(el.textContent!==String(val
 const note = value => label('message', value);
 const bindingNote = value => label('binding-message', value);
 const usbLayout = state => state?.usbLayout ?? (state?.standardUsb ? 1 : 0);
+const hasWireless = state => Number.isInteger(state?.bluetooth);
+const hasAnalog = state => hasWireless(state) || usbLayout(state) === 2;
+const usesBluetooth = state => !!state?.bluetoothMode;
+const outputLayout = state => usesBluetooth(state) ? 2 : usbLayout(state);
+const bluetoothStatus = [
+  'Pairing window closed. To pair, switch to USB, then back to Bluetooth.',
+  'Pairing window open. Choose FrameBridge Gamepad in Bluetooth settings.',
+  'Waiting for a paired host to reconnect.',
+  'Bluetooth host connected. Waiting for it to enable gamepad input.',
+  'Bluetooth host ready for gamepad input.'
+];
 const sourceCount = 32 + travelActions.length;
 const outputFlag = action => 1 << (action - 1);
 
@@ -141,7 +152,7 @@ function refreshTriggerSettings() {
 
 function refreshTriggerSources() {
   refreshTriggerSettings();
-  const enabled = usbLayout(latest) === 2 && draft?.[0] >= 4;
+  const enabled = hasAnalog(latest) && draft?.[0] >= 4;
   byId('analog-routing').hidden = !enabled;
   if (!enabled) return;
   triggerSelectors.forEach((id, output) => {
@@ -210,7 +221,7 @@ function redrawBindings() {
     const alternate = byId('layout-name-' + action);
     alternate.hidden = !latest || layout === 2;
     if (!alternate.hidden) alternate.textContent = usbLayouts[layout] + ' · ' + outputName(action, layout, null);
-    const labelName = outputTitle(action, layout);
+    const labelName = outputTitle(action, outputLayout(latest));
     byId('learn-' + action).setAttribute('aria-label', 'Learn ' + labelName);
     byId('clear-' + action).setAttribute('aria-label', 'Clear ' + labelName);
     label('touch-action-' + action, labelName);
@@ -276,15 +287,15 @@ function learnFrom(state) {
   const [h,b] = edges[0], source = h * 16 + b;
   const old = BindingBackup.mask(draft, source), flag = outputFlag(learning);
   BindingBackup.setMask(draft, source, old | flag);
-  const route = sourceSignal(source, draft) + ' → ' + outputName(learning, usbLayout(state));
+  const route = sourceSignal(source, draft) + ' → ' + outputName(learning, outputLayout(state));
   endBinding(route + (old & flag ? ' is already assigned.' : '. Save to apply.'));
   redrawBindings();
 }
 const liveRows = [];
-let liveProfile, liveLayout;
+let liveProfile, liveLayout, liveAnalog;
 const liveMasks = {click:'masks', travel:'travel', touch:'active'};
 
-function buildLiveBindings(profile, layout) {
+function buildLiveBindings(profile, layout, analog) {
   liveRows.length = 0;
   for (let h = 0; h < 2; ++h) {
     const side = sides[h].toLowerCase();
@@ -332,10 +343,10 @@ function buildLiveBindings(profile, layout) {
       const offset = Touch.offset(h, slot), action = profile[offset + 4];
       if (profile[offset] === Touch.empty) return;
       if (action) add('touch', slot, surface + ' touch', outputName(action, layout, profile), offset);
-      if (layout !== 2) return;
+      if (!analog) return;
       for (let output = 0; output < 2; ++output) {
         if (profile[BindingBackup.triggerOffset + output] === 1 + h * 12 + slot)
-          add('analog', output, surface + ' touch', outputName(16 + output, layout, profile) + ' level', offset);
+          add('analog', output, surface + ' touch', outputName(16 + output, 2, profile) + ' level', offset);
       }
     });
     empty.hidden = list.children.length > 0;
@@ -345,9 +356,11 @@ function buildLiveBindings(profile, layout) {
 
 function updateLiveBindings(state) {
   if (!saved || currentView !== 'live') return;
-  const layout = state ? usbLayout(state) : liveLayout;
-  if (saved !== liveProfile || layout !== liveLayout) {
-    buildLiveBindings(saved, layout);
+  const layout = state ? outputLayout(state) : liveLayout;
+  const analog = state ? hasAnalog(state) : liveAnalog;
+  if (saved !== liveProfile || layout !== liveLayout || analog !== liveAnalog) {
+    buildLiveBindings(saved, layout, analog);
+    liveAnalog = analog;
     liveProfile = saved;
     liveLayout = layout;
   }
@@ -383,11 +396,17 @@ function updateLiveBindings(state) {
 
 function showState(state) {
   updateTriggerLevels(state);
-  label('network','Board connected'); label('usb',state.usb?'USB · connected':'USB · waiting');
+  label('network','Board connected');
+  const wireless = usesBluetooth(state);
+  const ready = wireless ? state.bluetooth === 4 : state.usb;
+  label('output-hosts', (wireless ? 'Bluetooth' : 'USB') + (ready ? ' ready' : ' · waiting for host'));
+  label('bluetooth-status', wireless
+    ? bluetoothStatus[state.bluetooth] ?? 'Bluetooth status unavailable.'
+    : 'Bluetooth output is off.');
   const layout = usbLayouts[usbLayout(state)] || 'Unknown USB layout';
   label('host-check', layout + (state.usb
-    ? ' · Host configured the USB gamepad. Check for input in the game or controller settings.'
-    : ' · Waiting for an active USB host. Unlock the host and reconnect the native USB/OTG port with a data cable.'));
+    ? ' · Host configured the USB gamepad.' + (wireless ? ' Input is routed to Bluetooth.' : '')
+    : ' · No USB gamepad host connected.'));
   for(let h=0;h<2;h++) {
     const key=sides[h].toLowerCase();
     label(key+'-link',state.up[h]?'Connected':'Searching');
@@ -400,20 +419,23 @@ function showState(state) {
   updateLiveBindings(state);
   const rightSteam = state.up[1] && (state.seen[1] & 1);
   label('right-steam-level', rightSteam ? parseInt(state.raw[1].slice(10,12),16) + ' / 255' : '—');
-  const pro3 = usbLayout(state) === 2;
   const outputs=[];
   for(let i=0;i<18;i++) if(state.buttons & (1<<i)) {
     const action = i<11?i+1:i+5;
-    const output = outputName(action, usbLayout(state), saved);
+    const output = outputName(action, outputLayout(state), saved);
     if (!outputs.includes(output)) outputs.push(output);
   }
   if(state.hat<8) outputs.push('D-pad '+hats[state.hat].toLowerCase());
-  const levels = pro3 && state.triggers;
+  const levels = outputLayout(state) === 2 && state.triggers;
   byId('trigger-levels').hidden = !levels;
   if (levels) label('trigger-levels','Left trigger '+levels[0]+' / 255 · Right trigger '+levels[1]+' / 255');
   label('output', outputs.join(' + ') || (levels && levels.some(Boolean) ? 'Analog trigger active' : 'Neutral'));
-  byId('diagnostic').hidden=!(state.bad||state.overflows);
-  label('diagnostic',state.bad+' malformed packets · '+state.overflows+' USB queue overflows');
+  const diagnostics = [];
+  if (state.bad) diagnostics.push(state.bad + ' malformed packets');
+  if (state.overflows) diagnostics.push(state.overflows + ' USB queue overflows');
+  if (state.bluetoothOverflows) diagnostics.push(state.bluetoothOverflows + ' Bluetooth queue overflows');
+  byId('diagnostic').hidden = !diagnostics.length;
+  label('diagnostic', diagnostics.join(' · '));
 }
 async function poll() {
   clearTimeout(timer);
@@ -434,7 +456,8 @@ async function poll() {
         if (!keepDraft) draft = p.slice();
       }
     }
-    const state=await request('/api/state'), reconnect=!latest || usbLayout(latest)!==usbLayout(state);
+    const state=await request('/api/state');
+    const reconnect=!latest || usbLayout(latest)!==usbLayout(state) || usesBluetooth(latest)!==usesBluetooth(state);
     latest=state;
     if(learning) learnFrom(state);
     showState(state);
@@ -448,7 +471,7 @@ async function poll() {
     label('sensor-value','—'); byId('sensor-meter').value=0;
     label('touch-left','Left · offline'); label('touch-right','Right · offline');
     label('network',e.message === 'Reload setup to match the board firmware.' ? e.message : 'Board disconnected');
-    label('usb','USB · unknown');
+    label('output-hosts','Waiting for board'); label('bluetooth-status','Waiting for board');
     for(const side of ['left','right']){
       for(const field of ['mask','count','xy','link']) label(side+'-'+field,'—');
       byId(side+'-link').classList.remove('active');
@@ -516,7 +539,7 @@ function refreshSourceEditor() {
   if (document.activeElement !== name) name.value = draft ? BindingBackup.name(draft, selectedSource) : '';
   const mask = draft ? BindingBackup.mask(draft, selectedSource) : 0;
   for (const [i, {check, caption}] of sourceChecks.entries()) {
-    const action = i + 1, title = outputTitle(action, usbLayout(latest));
+    const action = i + 1, title = outputTitle(action, outputLayout(latest));
     check.checked = !!(mask & outputFlag(action));
     check.disabled = locked;
     if (caption.textContent !== title) caption.textContent = title;
@@ -585,7 +608,7 @@ names.slice(1).forEach((_, i) => {
     if(travelIndex>=0 && latest.up[h] && (latest.seen[h]&2)) {
       pull={hand:h,epoch:latest.epoch[h],rest:travelBytes(latest,h),travelOnly};
     }
-    const output = outputName(a, usbLayout(latest));
+    const output = outputName(a, outputLayout(latest));
     const prompt=travelOnly ? 'Hold the '+learnTarget(a)+' at the desired travel, then choose Capture held travel.' :
       pull ? 'Hold the '+learnTarget(a)+' press. If no click appears, choose Capture held travel.' :
       'Release other controls, then hold the button for '+output+'.';
@@ -718,7 +741,7 @@ for (const editor of triggerEditors) {
 }
 triggerSelectors.forEach((id, side) => {
   byId(id).onchange = e => {
-    if (saving || usbLayout(latest) !== 2 || !(draft?.[0] >= 4)) return;
+    if (saving || !hasAnalog(latest) || !(draft?.[0] >= 4)) return;
     draft[BindingBackup.triggerOffset + side] = Number(e.target.value);
     note('Trigger source changed. Save to apply.');
     redrawBindings();
@@ -830,7 +853,7 @@ function setSurfaceState(id,status) {
 }
 
 function refreshSurfaceLists() {
-  if(latest) lastTouchLayout=usbLayout(latest);
+  if(latest) lastTouchLayout=outputLayout(latest);
   Touch.slots.forEach((slots,side)=>slots.forEach((name,index)=>{
     const id=surfaceId(side,index), row=byId(id), offset=Touch.offset(side,index);
     const calibrated=!!draft && draft[offset]!==Touch.empty;
@@ -846,7 +869,7 @@ function refreshSurfaceLists() {
         const source=1+side*12+index;
         for(let trigger=0;trigger<2;trigger++){
           if(draft[BindingBackup.triggerOffset+trigger]===source)
-            outputs.push(outputName(16+trigger,2)+(lastTouchLayout===2?' (analog)':' (Pro 3 analog)'));
+            outputs.push(outputName(16+trigger,2)+(lastTouchLayout===2?' (analog)':' (Bluetooth / Pro 3 analog)'));
         }
       }
       label(id+'-output', outputs.length ? 'Output · '+outputs.join(' + ') : calibrated ? 'No output assigned' : '');

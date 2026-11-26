@@ -89,10 +89,10 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t id, hid_report_type_t t
                                uint8_t *buffer, uint16_t requested)
 {
     if (instance || id != input_report_id() || type != HID_REPORT_TYPE_INPUT) return 0;
-    bridge_status s;
-    bridge_get_status(&s);
+    pad_report report;
+    bridge_get_output(false, &report);
     uint8_t encoded[PRO3_INPUT_PAYLOAD_SIZE];
-    size_t n = encode_report(&s.output, encoded);
+    size_t n = encode_report(&report, encoded);
     if (n > requested) n = requested;
     memcpy(buffer, encoded, n);
     return n;

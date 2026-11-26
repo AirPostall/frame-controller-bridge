@@ -20,6 +20,7 @@
 
 #ifdef FRAME_BRIDGE
 #include "bridge.h"
+#include "ble_host.h"
 #include "pairing.h"
 #endif
 
@@ -331,6 +332,10 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 static void maintain_links(struct ble_npl_event *event)
 {
     if (!host_ready) return;
+#ifdef FRAME_BRIDGE
+    // Advertising the gamepad and scanning for the two hands are independent GAP roles.
+    ble_host_tick(own_addr_type);
+#endif
     bool need_scan = false;
     int64_t now = esp_timer_get_time();
     for (size_t i = 0; i < PEER_COUNT; ++i) {
@@ -357,6 +362,7 @@ static void on_reset(int reason)
 {
     host_ready = false;
 #ifdef FRAME_BRIDGE
+    ble_host_reset();
     for (unsigned h = 0; h < PEER_COUNT; ++h) bridge_connection(h, false);
 #endif
     ble_npl_callout_stop(&timer);
@@ -401,6 +407,9 @@ void app_main(void)
     ESP_ERROR_CHECK(nimble_port_init());
     ble_hs_cfg.reset_cb = on_reset;
     ble_hs_cfg.sync_cb = on_sync;
+#ifdef FRAME_BRIDGE
+    ble_host_init();
+#endif
     ble_npl_callout_init(&timer, nimble_port_get_dflt_eventq(), maintain_links, NULL);
     nimble_port_freertos_init(host_task);
 }

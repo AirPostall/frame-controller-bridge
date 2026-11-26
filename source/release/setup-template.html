@@ -23,6 +23,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{ou
 <label for="left">Left controller</label><input id="left" value="@@LEFT@@" required autocomplete="off" spellcheck="false" autocapitalize="characters">
 <label for="right">Right controller</label><input id="right" value="@@RIGHT@@" required autocomplete="off" spellcheck="false" autocapitalize="characters">
 <label for="layout">USB layout</label><select id="layout"><option value="2">8BitDo Pro 3 · wired compatibility test</option><option value="1">Standard · generic HID</option><option value="0">Extended · original 16-bit sticks</option></select>
+<p>The board starts in USB mode. Hold BOOT for at least 3 seconds to send gamepad input only over Bluetooth. Choose FrameBridge Gamepad in Bluetooth settings within 2 minutes. Hold BOOT again for at least 3 seconds to return to USB. Bluetooth uses the Pro 3 mapping with any USB layout.</p>
 <button type="submit">Download paired firmware</button>
 </form>
 <output id="message" aria-live="polite"></output>

@@ -1,4 +1,6 @@
 #include "bridge.h"
+#include "ble_host.h"
+#include "boot_button.h"
 #include "pairing.h"
 #include <stdio.h>
 #include <string.h>
@@ -8,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -42,7 +45,7 @@ static esp_err_t snapshot(httpd_req_t *req)
     bridge_status s;
     bridge_get_status(&s);
     static const char digits[] = "0123456789abcdef";
-    char raw[HAND_COUNT][RAW_CHANNELS * 2 + 1] = {0}, body[512];
+    char raw[HAND_COUNT][RAW_CHANNELS * 2 + 1] = {0}, body[576];
     for (unsigned h = 0; h < HAND_COUNT; ++h) {
         for (unsigned i = 0; i < RAW_CHANNELS; ++i) {
             uint8_t b = s.hands[h].raw[i];
@@ -51,19 +54,19 @@ static esp_err_t snapshot(httpd_req_t *req)
         }
     }
     snprintf(body, sizeof(body),
-        "{\"raw\":[\"%s\",\"%s\"],\"seen\":[%u,%u],\"epoch\":[%lu,%lu],\"active\":[%u,%u],\"usb\":%u,\"usbLayout\":%u,\"standardUsb\":%u,\"up\":[%u,%u],\"masks\":[%u,%u],\"axes\":[[%d,%d],[%d,%d]],"
+        "{\"raw\":[\"%s\",\"%s\"],\"seen\":[%u,%u],\"epoch\":[%lu,%lu],\"active\":[%u,%u],\"usb\":%u,\"bluetoothMode\":%u,\"bluetooth\":%u,\"usbLayout\":%u,\"standardUsb\":%u,\"up\":[%u,%u],\"masks\":[%u,%u],\"axes\":[[%d,%d],[%d,%d]],"
         "\"travel\":[%u,%u],\"packets\":[%lu,%lu],\"buttons\":%u,\"hat\":%u,"
-        "\"triggers\":[%u,%u],\"bad\":%lu,\"overflows\":%lu}",
+        "\"triggers\":[%u,%u],\"bad\":%lu,\"overflows\":%lu,\"bluetoothOverflows\":%lu}",
         raw[0], raw[1], s.hands[0].seen, s.hands[1].seen,
         (unsigned long)s.epoch[0], (unsigned long)s.epoch[1], s.hands[0].active, s.hands[1].active,
-        s.usb, pairing.usb_layout, pairing.usb_layout == USB_LAYOUT_STANDARD,
+        s.usb, s.bluetooth_mode, (unsigned)ble_host_state(), pairing.usb_layout, pairing.usb_layout == USB_LAYOUT_STANDARD,
         s.connected[0], s.connected[1], s.hands[0].buttons, s.hands[1].buttons,
         s.hands[0].x, s.hands[0].y, s.hands[1].x, s.hands[1].y,
         s.hands[0].pressed_travel, s.hands[1].pressed_travel,
         (unsigned long)s.packets[0], (unsigned long)s.packets[1],
         pad_usb_buttons(&s.output), s.output.bytes[2],
         s.output.trigger_level[0], s.output.trigger_level[1],
-        (unsigned long)s.bad, (unsigned long)s.overflows);
+        (unsigned long)s.bad, (unsigned long)s.overflows, (unsigned long)s.ble_overflows);
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, body);
@@ -165,26 +168,36 @@ static esp_err_t start_setup(void)
 
 static void switch_setup(void *arg)
 {
+    // Ignore BOOT if it was held during reset, until the first release.
+    bool down = gpio_get_level(GPIO_NUM_0) == 0;
+    boot_button button = {.down=down, .raw_down=down, .hold_sent=down};
+    int64_t wifi_deadline = INT64_MAX;
     for (;;) {
-        // Setup is off at boot. A physical BOOT tap opens a 30 minute session.
-        uint32_t signal = ulTaskNotifyTake(pdTRUE, server ? pdMS_TO_TICKS(30UL * 60 * 1000) : portMAX_DELAY);
-        if (signal) {
-            vTaskDelay(pdMS_TO_TICKS(60));
-            ulTaskNotifyTake(pdTRUE, 0); // discard switch bounce
-        }
-        if (server) {
+        int64_t now = esp_timer_get_time() / 1000;
+        boot_action action = boot_button_sample(&button, gpio_get_level(GPIO_NUM_0) == 0, now);
+        if (action == BOOT_HOLD) ble_host_toggle_mode();
+        if (server && (action == BOOT_TAP || now >= wifi_deadline)) {
             httpd_stop(server);
             server = NULL;
             esp_wifi_stop();
             esp_wifi_deinit();
-        } else {
+            wifi_deadline = INT64_MAX;
+        } else if (action == BOOT_TAP) {
             esp_err_t rc = start_setup();
-            if (rc != ESP_OK) ESP_LOGE(TAG, "Setup network unavailable: %s", esp_err_to_name(rc));
+            if (rc == ESP_OK) wifi_deadline = esp_timer_get_time() / 1000 + SETUP_WIFI_MS;
+            else ESP_LOGE(TAG, "Setup network unavailable: %s", esp_err_to_name(rc));
         }
+        int64_t deadline = boot_next_wake(&button, wifi_deadline);
+        TickType_t wait = portMAX_DELAY;
+        if (deadline != INT64_MAX) {
+            int64_t remaining = deadline - esp_timer_get_time() / 1000;
+            wait = remaining > 0 ? pdMS_TO_TICKS(remaining) + 1 : 0;
+        }
+        ulTaskNotifyTake(pdTRUE, wait);
     }
 }
 
-static void IRAM_ATTR boot_pressed(void *arg)
+static void IRAM_ATTR boot_edge(void *arg)
 {
     BaseType_t wake = pdFALSE;
     vTaskNotifyGiveFromISR(setup_task, &wake);
@@ -194,11 +207,12 @@ static void IRAM_ATTR boot_pressed(void *arg)
 void setup_init(void)
 {
     gpio_config_t button = {.pin_bit_mask = 1ULL << GPIO_NUM_0,
-        .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_PULLUP_ENABLE, .intr_type = GPIO_INTR_NEGEDGE};
+        .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_PULLUP_ENABLE, .intr_type = GPIO_INTR_ANYEDGE};
     ESP_ERROR_CHECK(gpio_config(&button));
     ESP_ERROR_CHECK(xTaskCreate(switch_setup, "setup-switch", 4096, NULL, 3, &setup_task)
                     == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     esp_err_t err = gpio_install_isr_service(0);
     if (err != ESP_ERR_INVALID_STATE) ESP_ERROR_CHECK(err);
-    ESP_ERROR_CHECK(gpio_isr_handler_add(GPIO_NUM_0, boot_pressed, NULL));
+    ESP_ERROR_CHECK(gpio_isr_handler_add(GPIO_NUM_0, boot_edge, NULL));
+    xTaskNotifyGive(setup_task);
 }

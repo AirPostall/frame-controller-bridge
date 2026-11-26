@@ -9,9 +9,9 @@ static uint8_t stick_value(const uint8_t little_endian[2])
     return 127 + ((value * 128 + 16383) / 32767);
 }
 
-size_t pro3_encode(const pad_report *report, uint8_t out[PRO3_INPUT_PAYLOAD_SIZE])
+size_t pro3_encode_controls(const pad_report *report, uint8_t out[PRO3_CONTROL_BYTES])
 {
-    memset(out, 0, PRO3_INPUT_PAYLOAD_SIZE);
+    memset(out, 0, PRO3_CONTROL_BYTES);
     out[0] = report->bytes[2] < 8 ? report->bytes[2] : 8;
     for (unsigned i = 0; i < 4; ++i) {
         out[1 + i] = stick_value(&report->bytes[3 + i * 2]);
@@ -36,5 +36,12 @@ size_t pro3_encode(const pad_report *report, uint8_t out[PRO3_INPUT_PAYLOAD_SIZE
             out[7 + bit / 8] |= 1U << (bit % 8);
         }
     }
+    return PRO3_CONTROL_BYTES;
+}
+
+size_t pro3_encode(const pad_report *report, uint8_t out[PRO3_INPUT_PAYLOAD_SIZE])
+{
+    pro3_encode_controls(report, out);
+    memset(out + PRO3_CONTROL_BYTES, 0, PRO3_INPUT_PAYLOAD_SIZE - PRO3_CONTROL_BYTES);
     return PRO3_INPUT_PAYLOAD_SIZE;
 }

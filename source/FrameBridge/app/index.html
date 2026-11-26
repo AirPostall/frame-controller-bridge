@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#142220"><title>Frame Bridge</title><link rel="stylesheet" href="/style.css"><script defer src="/touch.js"></script><script defer src="/backup.js"></script><script defer src="/ui.js"></script></head>
 <body><header><div class="brand"><span class="mark" aria-hidden="true">⌁</span> Frame Bridge</div><div id="network" role="status">Connecting to board…</div></header>
 <main><nav aria-label="Views"><button id="live-tab" aria-pressed="true" aria-controls="live">Live inputs</button><button id="map-tab" aria-pressed="false" aria-controls="mapping">Bindings</button><button id="sensors-tab" aria-pressed="false" aria-controls="sensors">Touch</button></nav>
-<section id="live"><div class="title"><h1>Controller inputs</h1><span id="usb" class="pill">USB · waiting</span></div>
+<section id="live"><div class="title"><h1>Controller inputs</h1><span id="output-hosts" class="pill">Waiting for board</span></div>
 <article id="bound-inputs" class="wide" aria-labelledby="bound-title"><h2 id="bound-title">Saved input bindings</h2>
 <div class="live-groups">
 <section class="live-group" aria-labelledby="live-left-title"><h3 id="live-left-title">Left hand</h3><ul class="live-list" id="live-left-bindings" aria-labelledby="live-left-title"></ul><p id="live-left-empty">Waiting for bindings…</p></section>
@@ -11,8 +11,11 @@
 <div class="hands">
 <article><div class="hand-title"><h2>Left hand</h2><span id="left-link">Waiting</span></div><div class="input-line"><span>Button bits</span><code id="left-mask">—</code></div><div class="input-line"><span>Packets</span><span id="left-count">—</span></div><div class="input-line"><span>Raw stick X / Y</span><code id="left-xy">—</code></div></article>
 <article><div class="hand-title"><h2>Right hand</h2><span id="right-link">Waiting</span></div><div class="input-line"><span>Button bits</span><code id="right-mask">—</code></div><div class="input-line"><span>Packets</span><span id="right-count">—</span></div><div class="input-line"><span>Raw stick X / Y</span><code id="right-xy">—</code></div><div class="input-line"><span>Right Steam · 0x19 byte 5</span><code id="right-steam-level">—</code></div></article></div>
-<article class="wide"><div class="hand-title"><h2>Gamepad output</h2><span>USB HID</span></div><h3>USB host check</h3><p id="host-check" role="status">Waiting for board</p><p id="output">Waiting for board</p><p id="trigger-levels" hidden></p><p id="diagnostic" hidden></p></article>
-<p class="hint">Setup Wi-Fi closes after 30 minutes. Tap BOOT to close it sooner. Keep the USB data cable connected.</p></section>
+<article class="wide"><h2>Gamepad output</h2><p id="output">Waiting for board</p><p id="trigger-levels" hidden></p><p id="diagnostic" hidden></p>
+<h3>Bluetooth gamepad</h3><p id="bluetooth-status" role="status">Waiting for board</p>
+<p>USB is selected at startup. Hold BOOT for at least 3 seconds to switch to Bluetooth. To pair an iPad, select <strong>FrameBridge Gamepad</strong> in Settings → Bluetooth within 2 minutes. Hold BOOT again for at least 3 seconds to return to USB.</p>
+<h3>USB host check</h3><p id="host-check" role="status">Waiting for board</p></article>
+<p class="hint">Setup Wi-Fi closes after 30 minutes. Tap BOOT to close it sooner. Keep the ESP32 powered during play.</p></section>
 <section id="mapping" hidden><div class="title"><h1>Input bindings</h1><span id="dirty" class="pill">On board</span></div>
 <p class="intro">Choose Learn beside an output and press a Steam Frame button to add it. Repeat to add another button to the same output. Assign touch gestures on the Touch tab.</p>
 <details class="wide source-editor"><summary>Edit by Steam Frame button</summary>
@@ -54,7 +57,7 @@
 <p id="trigger-right-note" role="status"></p></fieldset>
 </div><p>Bit 7 also reports a fixed click. Choose <strong>Use travel for L2</strong> or <strong>Use travel for R2</strong> to move that output from its bit 7 click to the adjustable travel source.</p></article>
 <article id="analog-routing" class="wide" hidden><h2>Analog trigger sources</h2>
-<p>Choose a calibrated touch surface to vary a Pro 3 trigger from 0 to 255. In Touch, set Release at for zero output and Engage at for full output. A bound digital trigger press always gives full output.</p>
+<p>Choose a calibrated touch surface to vary a trigger from 0 to 255 over Bluetooth or wired Pro 3 USB. In Touch, set Release at for zero output and Engage at for full output. A bound digital trigger press always gives full output.</p>
 <div class="choices"><label>Left trigger <select id="lt-source"></select></label><label>Right trigger <select id="rt-source"></select></label></div></article>
 <article class="wide"><h2>Experimental sticks</h2><p>Enable each stick only after checking both axes and their direction in Live inputs or your game.</p><div class="choices"><label><input id="stick-left" type="checkbox"> Left stick</label><label><input id="stick-right" type="checkbox"> Right stick</label></div></article>
 <article class="wide"><h2>Binding backups</h2><p>Export the bindings shown here, including unsaved edits. Imported settings take effect when you choose Save to board.</p>
