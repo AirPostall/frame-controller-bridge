@@ -36,6 +36,10 @@ const bluetoothStatus = [
   'Bluetooth host ready for gamepad input.'
 ];
 const sourceCount = 32 + travelActions.length;
+const gyroShortcuts = [
+  {select:byId('gyro-reset-button'), read:BindingBackup.gyroResetButton, write:BindingBackup.setGyroResetButton},
+  {select:byId('gyro-hold-button'), read:BindingBackup.gyroHoldButton, write:BindingBackup.setGyroHoldButton}
+];
 const outputFlag = action => 1 << (action - 1);
 const stickEditors = ['left', 'right'].map(side => {
   const field = key => byId('stick-' + side + '-' + key);
@@ -250,19 +254,30 @@ function updateMovementStatus(state) {
     ? 'Select the wired Pro 3 layout for USB motion' : 'Waiting for a compatible host'};
   label('movement-route', motion?.hand === 0 ? 'Off' : routes[motion?.route] || 'Waiting for board');
   label('gyro-reset-count', motion?.zeroCount ?? '—');
+  let holdStatus = 'Waiting for board';
+  if (motion && saved) {
+    if (motion.gyroHeld) holdStatus = 'Held · rotation muted';
+    else if (!BindingBackup.gyroHoldButton(saved)) holdStatus = 'Unbound';
+    else holdStatus = motion.hand ? 'Released' : 'Movement off';
+  }
+  label('gyro-hold-status', holdStatus);
   byId('movement-axes').hidden = !fresh;
   for (const axis of ['accel','gyro']) label('movement-' + axis, fresh ? motion[axis].join(' / ') : '—');
   byId('movement-samples').hidden = !hasSample;
   if (hasSample) label('movement-samples', motion.samples + ' samples received · Last sample ' + motion.ageMs + ' ms ago');
 }
 function refreshMovementEditor() {
-  const hand = byId('movement-hand'), gain = byId('gyro-gain'), button = byId('gyro-reset-button');
-  hand.disabled = gain.disabled = button.disabled = !draft || saving;
+  const hand = byId('movement-hand'), gain = byId('gyro-gain');
+  hand.disabled = gain.disabled = !draft || saving;
+  for (const {select, read} of gyroShortcuts) {
+    select.disabled = !draft || saving;
+    if (!draft) continue;
+    select.value = String(read(draft));
+    // Keep imported contact shortcuts visible without offering trigger touch as a click.
+    for (const value of [8,24]) select.children[value].hidden = select.value !== String(value);
+  }
   if (!draft) return;
   hand.value = String(BindingBackup.motionHand(draft));
-  button.value = String(BindingBackup.gyroResetButton(draft));
-  // Keep imported contact shortcuts visible without offering trigger touch as a click.
-  for (const source of [7,23]) gyroButtonOptions[source].hidden = button.value !== String(source + 1);
   gain.value = String(BindingBackup.gyroGain(draft));
   gain.setAttribute('aria-valuetext', gain.value + '%');
   label('gyro-gain-value', gain.value + '%');
@@ -521,8 +536,8 @@ async function poll() {
       const previousSaved = saved;
       const p=await request('/api/profile');
       if (!defaultProfile || p[0] !== defaultProfile[0]) defaultProfile=await request('/api/defaults');
-      if (p[0] !== 9 || p[0] !== defaultProfile[0] ||
-          [p,defaultProfile].some(x => x.length !== BindingBackup.size(9))) {
+      if (p[0] !== 10 || p[0] !== defaultProfile[0] ||
+          [p,defaultProfile].some(x => x.length !== BindingBackup.size(10))) {
         throw Error('Reload setup to match the board firmware.');
       }
       if (saved === previousSaved && (!saved || p.length !== saved.length || p.some((v,i) => v !== saved[i]))) {
@@ -574,17 +589,18 @@ function openView(view) {
   redrawBindings();
 }
 
-const sourceOptions = [], sourceChecks = [], gyroButtonOptions = [];
+const sourceOptions = [], sourceChecks = [];
 for (let source = 0; source < sourceCount; ++source) {
   const option = document.createElement('option');
   option.value = String(source);
   byId('binding-source').append(option);
   sourceOptions.push(option);
-  const resetOption = document.createElement('option');
-  resetOption.value = String(source + 1);
-  if (source === 7 || source === 23) resetOption.hidden = resetOption.disabled = true;
-  byId('gyro-reset-button').append(resetOption);
-  gyroButtonOptions.push(resetOption);
+  for (const {select} of gyroShortcuts) {
+    const shortcutOption = document.createElement('option');
+    shortcutOption.value = String(source + 1);
+    if (source === 7 || source === 23) shortcutOption.hidden = shortcutOption.disabled = true;
+    select.append(shortcutOption);
+  }
 }
 for (let action = 1; action < names.length; ++action) {
   const option = document.createElement('label');
@@ -615,10 +631,12 @@ function refreshSourceEditor() {
     const signal = source < 32 && measuredButtons[Math.floor(source / 16)][source % 16] ? ' · bit ' + source % 16 : '';
     const title = (alias ? alias + ' (' + canonical + ')' : canonical) + signal;
     if (option.textContent !== title) option.textContent = title;
-    const resetOption = gyroButtonOptions[source];
-    const resetTitle = source >= 32 && draft && !draft[travelOffset(source - 32)]
+    const shortcutTitle = source >= 32 && draft && !draft[travelOffset(source - 32)]
       ? title + ' · calibrate in Bindings' : title;
-    if (resetOption.textContent !== resetTitle) resetOption.textContent = resetTitle;
+    for (const {select} of gyroShortcuts) {
+      const option = select.children[source + 1];
+      if (option.textContent !== shortcutTitle) option.textContent = shortcutTitle;
+    }
   }
   select.value = String(selectedSource);
   if (document.activeElement !== name) name.value = draft ? BindingBackup.name(draft, selectedSource) : '';
@@ -909,12 +927,14 @@ byId('gyro-gain').oninput=event=>{
   refreshMovementEditor();
   refreshDirtyState();
 };
-byId('gyro-reset-button').onchange=event=>{
-  if (!draft || saving) return;
-  BindingBackup.setGyroResetButton(draft, Number(event.target.value));
-  refreshMovementEditor();
-  refreshDirtyState();
-};
+for (const {select, write} of gyroShortcuts) {
+  select.onchange=()=>{
+    if (!draft || saving) return;
+    write(draft, Number(select.value));
+    refreshMovementEditor();
+    refreshDirtyState();
+  };
+}
 document.addEventListener('visibilitychange',()=>{
   clearTimeout(timer);
   if(document.hidden && learning) endBinding('Learning paused. Choose Learn to try again.');

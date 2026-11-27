@@ -267,6 +267,7 @@ static void test_motion_hand(void)
     assert(profile.motion_hand == MOTION_OFF);
     assert(profile.gyro_gain == 100);
     assert(!profile.gyro_reset_button);
+    assert(!profile.gyro_hold_button);
     const uint8_t gains[] = {GYRO_GAIN_MIN, GYRO_GAIN_DEFAULT, GYRO_GAIN_MAX};
     for (unsigned hand = MOTION_OFF; hand <= MOTION_RIGHT; ++hand) {
         profile.motion_hand = hand;
@@ -278,18 +279,28 @@ static void test_motion_hand(void)
     }
     for (unsigned button = 0; button <= PRESS_SOURCES; ++button) {
         profile.gyro_reset_button = button;
+        profile.gyro_hold_button = PRESS_SOURCES - button;
         pad_profile loaded;
         assert(pad_profile_valid(&profile));
         assert(pad_profile_load(&loaded, (const uint8_t *)&profile, sizeof(profile)));
         assert(loaded.gyro_reset_button == button);
+        assert(loaded.gyro_hold_button == PRESS_SOURCES - button);
     }
+    profile.gyro_hold_button = PRESS_SOURCES + 1;
+    assert(!pad_profile_valid(&profile));
+    assert(!pad_profile_load(&profile, (const uint8_t *)&profile, sizeof(profile)));
+    profile.version = 9;
+    assert(pad_profile_load(&profile, (const uint8_t *)&profile, V9_PROFILE_BYTES));
+    assert(profile.version == PROFILE_VERSION && profile.motion_hand == MOTION_RIGHT);
+    assert(profile.gyro_gain == GYRO_GAIN_MAX && profile.gyro_reset_button == PRESS_SOURCES);
+    assert(!profile.gyro_hold_button);
     profile.gyro_reset_button = PRESS_SOURCES + 1;
     assert(!pad_profile_valid(&profile));
     assert(!pad_profile_load(&profile, (const uint8_t *)&profile, sizeof(profile)));
     profile.version = 8;
     assert(pad_profile_load(&profile, (const uint8_t *)&profile, V8_PROFILE_BYTES));
     assert(profile.version == PROFILE_VERSION && profile.motion_hand == MOTION_RIGHT);
-    assert(profile.gyro_gain == GYRO_GAIN_MAX && !profile.gyro_reset_button);
+    assert(profile.gyro_gain == GYRO_GAIN_MAX && !profile.gyro_reset_button && !profile.gyro_hold_button);
 
     for (unsigned i = 0; i < 2; ++i) {
         profile.gyro_gain = i ? 251 : 24;
@@ -304,7 +315,7 @@ static void test_motion_hand(void)
     profile.gyro_gain = 0;
     assert(pad_profile_load(&profile, (const uint8_t *)&profile, V7_PROFILE_BYTES));
     assert(profile.version == PROFILE_VERSION && profile.motion_hand == MOTION_OFF);
-    assert(profile.gyro_gain == 100 && !profile.gyro_reset_button);
+    assert(profile.gyro_gain == 100 && !profile.gyro_reset_button && !profile.gyro_hold_button);
 }
 
 static void test_many_to_many(void)

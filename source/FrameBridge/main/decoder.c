@@ -7,7 +7,8 @@ _Static_assert(offsetof(pad_profile, names) == 288 && offsetof(pad_profile, stic
 _Static_assert(sizeof(stick_settings) == 3 && offsetof(pad_profile, motion_hand) == V7_PROFILE_BYTES, "v6/v7 profile prefix");
 _Static_assert(offsetof(pad_profile, gyro_gain) == V7_PROFILE_BYTES + 1 &&
                offsetof(pad_profile, gyro_reset_button) == V8_PROFILE_BYTES, "v8 profile prefix");
-_Static_assert(sizeof(pad_profile) == V8_PROFILE_BYTES + 1, "v9 profile wire layout");
+_Static_assert(offsetof(pad_profile, gyro_hold_button) == V9_PROFILE_BYTES &&
+               sizeof(pad_profile) == V9_PROFILE_BYTES + 1, "v10 profile wire layout");
 _Static_assert(offsetof(pad_report, motion_valid) == 14, "packed gamepad controls");
 
 static uint16_t u16le(const uint8_t *p) { return p[0] | ((uint16_t)p[1] << 8); }
@@ -97,7 +98,7 @@ static bool valid_profile_data(const pad_profile *p)
 {
     if (p->version != PROFILE_VERSION || p->stick_flags > 3 || p->motion_hand > MOTION_RIGHT ||
         p->gyro_gain < GYRO_GAIN_MIN || p->gyro_gain > GYRO_GAIN_MAX ||
-        p->gyro_reset_button > PRESS_SOURCES) return false;
+        p->gyro_reset_button > PRESS_SOURCES || p->gyro_hold_button > PRESS_SOURCES) return false;
     for (unsigned i = 0; i < CLICK_SOURCES; ++i)
         if (p->reserved[i]) return false;
     for (unsigned i = 0; i < PRESS_SOURCES; ++i)
@@ -225,11 +226,10 @@ static void migrate_trigger_contacts(pad_profile *p, unsigned version)
 bool pad_profile_load(pad_profile *out, const uint8_t *bytes, size_t length)
 {
     pad_profile next = {.gyro_gain = GYRO_GAIN_DEFAULT};
-    if (length == sizeof(next) && bytes[0] == PROFILE_VERSION) {
-        memcpy(&next, bytes, length);
-    } else if (length == V8_PROFILE_BYTES && bytes[0] == 8) {
-        memcpy(&next, bytes, length);
-    } else if (length == V7_PROFILE_BYTES && (bytes[0] == 6 || bytes[0] == 7)) {
+    if ((length == sizeof(next) && bytes[0] == PROFILE_VERSION) ||
+        (length == V9_PROFILE_BYTES && bytes[0] == 9) ||
+        (length == V8_PROFILE_BYTES && bytes[0] == 8) ||
+        (length == V7_PROFILE_BYTES && (bytes[0] == 6 || bytes[0] == 7))) {
         memcpy(&next, bytes, length);
     } else if (length == V5_PROFILE_BYTES && bytes[0] == 5) {
         memcpy(&next, bytes, length);

@@ -248,6 +248,7 @@ for (const v of [3, 4, 5, 6, 7]) {
   const v7 = backup.decode(stored, 7);
   assert.deepEqual(v8.slice(1, v7.length), v7.slice(1));
   assert.equal(backup.gyroResetButton(backup.decode(stored)), 0);
+  assert.equal(backup.gyroHoldButton(backup.decode(stored)), 0);
 }
 const v8 = backup.decode(sixData, 8);
 for (const hand of [0, 1, 2]) {
@@ -262,8 +263,9 @@ for (const hand of [0, 1, 2]) {
   assert.equal(data.gyro_reset_button, undefined);
   assert.deepEqual(backup.decode(JSON.parse(JSON.stringify(data)), 8), v8);
   const migrated = backup.decode(data);
-  assert.deepEqual(migrated.slice(1, -1), v8.slice(1));
+  assert.deepEqual(migrated.slice(1, v8.length), v8.slice(1));
   assert.equal(backup.gyroResetButton(migrated), 0);
+  assert.equal(backup.gyroHoldButton(migrated), 0);
   assert.throws(() => backup.decode(data, 7), /V8 firmware/);
 }
 for (const invalid of [-1, 3, 0.5, '1', null, undefined]) {
@@ -273,20 +275,43 @@ for (const invalid of [-1, 3, 0.5, '1', null, undefined]) {
 assert.throws(() => backup.setMotionHand(six, 1), /V8/);
 assert.throws(() => backup.setGyroGain(six, 100), /V8/);
 assert.throws(() => backup.setGyroResetButton(v8, 1), /V9/);
-const v9 = backup.decode(backup.encode(v8));
+const v9 = backup.decode(backup.encode(v8), 9);
 assert.equal(v9.length, 1737);
 for (let button = 0; button <= 38; ++button) {
   backup.setGyroResetButton(v9, button);
   assert.equal(backup.gyroResetButton(v9), button);
   const data = backup.encode(v9);
   assert.equal(data.gyro_reset_button, button);
-  assert.deepEqual(backup.decode(JSON.parse(JSON.stringify(data))), v9);
+  assert.equal(data.gyro_hold_button, undefined);
+  assert.deepEqual(backup.decode(JSON.parse(JSON.stringify(data)), 9), v9);
+  const migrated = backup.decode(data);
+  assert.deepEqual(migrated.slice(1, v9.length), v9.slice(1));
+  assert.equal(backup.gyroHoldButton(migrated), 0);
   assert.throws(() => backup.decode(data, 8), /V9 firmware/);
 }
 for (const invalid of [-1, 39, 1.5, '1', null, undefined]) {
   assert.throws(() => backup.setGyroResetButton(v9, invalid), /reset button/i);
   assert.throws(() => backup.decode({...backup.encode(v9), gyro_reset_button:invalid}), /reset button/i);
 }
+const v10 = backup.decode(backup.encode(v9));
+assert.equal(v10.length, 1738);
+assert.throws(() => backup.setGyroHoldButton(v9, 1), /V10/);
+backup.setGyroResetButton(v10, 17);
+for (let button = 0; button <= 38; ++button) {
+  backup.setGyroHoldButton(v10, button);
+  assert.equal(backup.gyroHoldButton(v10), button);
+  assert.equal(backup.gyroResetButton(v10), 17);
+  const data = backup.encode(v10);
+  assert.equal(data.gyro_hold_button, button);
+  assert.deepEqual(backup.decode(JSON.parse(JSON.stringify(data))), v10);
+  assert.throws(() => backup.decode(data, 9), /V10 firmware/);
+}
+for (const invalid of [-1, 39, 1.5, '1', null, undefined]) {
+  assert.throws(() => backup.setGyroHoldButton(v10, invalid), /hold button/i);
+  assert.throws(() => backup.decode({...backup.encode(v10), gyro_hold_button:invalid}), /hold button/i);
+}
+v10[v10.length - 1] = 39;
+assert.throws(() => backup.encode(v10), /hold button/i);
 v9[v9.length - 1] = 39;
 assert.throws(() => backup.encode(v9), /reset button/i);
 for (const invalid of [-1, 24, 251, 100.5, '100', null, undefined]) {
@@ -298,4 +323,4 @@ assert.throws(() => backup.encode(v8), /gyroscope/i);
 backup.setGyroGain(v8, 100);
 v8[backup.motionOffset] = 3;
 assert.throws(() => backup.encode(v8), /motion/i);
-console.log('V3–V9 backup round trips, motion source, gyro reset, trigger and joystick settings, migrations and validation passed.');
+console.log('V3–V10 backup round trips, motion source, gyro reset and hold bindings, migrations and validation passed.');

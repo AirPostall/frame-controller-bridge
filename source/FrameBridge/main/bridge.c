@@ -17,6 +17,7 @@ enum { WAKE_USB = 1, WAKE_BLE = 2 };
 enum { MOTION_TIMEOUT_US = 250000 };
 static esp_timer_handle_t motion_timer;
 static int32_t gyro_zero[3];
+static bool gyro_sample_muted;
 static bridge_status status;
 static pad_profile profile;
 static report_queue usb_queue, ble_queue;
@@ -36,11 +37,14 @@ static const pad_report *output_locked(bool bluetooth)
     return status.bluetooth_mode == bluetooth ? &status.output : &neutral;
 }
 
-// Keep raw readings for setup and capture the zero point in the same units.
-// Only outgoing reports subtract the reference, before the transport applies gain.
-static void apply_gyro_zero_locked(pad_report *out)
+// Apply the saved zero or mute only to outgoing angular rates. The raw sample
+// remains available for setup, zero capture and accelerometer passthrough.
+static void apply_gyro_locked(pad_report *out)
 {
-    if (out->motion_valid) {
+    if (!out->motion_valid) return;
+    if (gyro_sample_muted) {
+        memset(out->motion.gyro, 0, sizeof(out->motion.gyro));
+    } else {
         for (unsigned axis = 0; axis < 3; ++axis) out->motion.gyro[axis] -= gyro_zero[axis];
     }
 }
@@ -49,7 +53,7 @@ void bridge_get_output(bool bluetooth, pad_report *out)
 {
     portENTER_CRITICAL(&lock);
     *out = *output_locked(bluetooth);
-    apply_gyro_zero_locked(out);
+    apply_gyro_locked(out);
     portEXIT_CRITICAL(&lock);
 }
 
@@ -84,6 +88,36 @@ static unsigned motion_wake_locked(void)
     return 0;
 }
 
+static bool binding_active(unsigned binding, unsigned hand,
+                           unsigned buttons, unsigned travel)
+{
+    if (!binding) return false;
+    unsigned source = binding - 1;
+    if (source < CLICK_SOURCES)
+        return source / 16 == hand && (buttons & (1u << (source % 16)));
+    source -= CLICK_SOURCES;
+    return source / TRAVEL_SLOTS == hand && (travel & (1u << (source % TRAVEL_SLOTS)));
+}
+
+static unsigned update_gyro_hold_locked(unsigned wake)
+{
+    bool held = false;
+    for (unsigned h = 0; h < HAND_COUNT; ++h) {
+        const hand_state *hand = &status.hands[h];
+        if (status.connected[h] && binding_active(profile.gyro_hold_button, h,
+                                                   hand->buttons, hand->pressed_travel)) {
+            held = true;
+            break;
+        }
+    }
+    if (held == status.gyro_held) return wake;
+    status.gyro_held = held;
+    // On release keep the last repositioning sample muted until a fresh one arrives.
+    if (held) gyro_sample_muted = true;
+    if (!wake && status.output.motion_valid) wake = motion_wake_locked();
+    return wake;
+}
+
 static unsigned clear_motion_locked(void)
 {
     if (!status.output.motion_valid) return 0;
@@ -110,7 +144,7 @@ static bool peek_locked(report_queue *queue, bool bluetooth, pad_report *r, uint
     r->motion = live->motion;
     r->gyro_gain = live->gyro_gain;
     r->motion_tick_us = live->motion_tick_us;
-    apply_gyro_zero_locked(r);
+    apply_gyro_locked(r);
     return true;
 }
 
@@ -255,6 +289,7 @@ void bridge_connection(unsigned h, bool up)
         if (profile.motion_hand == h + 1) wake = reset_source_locked();
     }
     wake |= update_locked();
+    wake = update_gyro_hold_locked(wake);
     portEXIT_CRITICAL(&lock);
     wake_transports(wake);
 }
@@ -274,19 +309,9 @@ static void accept_sample_locked(const motion_sample *sample)
     }
     out->motion = *sample;
     out->motion_valid = true;
+    gyro_sample_muted = status.gyro_held;
     status.motion_time_us = now;
     ++status.motion_samples;
-}
-
-static bool reset_button_pressed(unsigned binding, unsigned hand,
-                                 unsigned new_buttons, unsigned new_travel)
-{
-    if (!binding) return false;
-    unsigned source = binding - 1;
-    if (source < CLICK_SOURCES)
-        return source / 16 == hand && (new_buttons & (1u << (source % 16)));
-    source -= CLICK_SOURCES;
-    return source / TRAVEL_SLOTS == hand && (new_travel & (1u << (source % TRAVEL_SLOTS)));
 }
 
 void bridge_receive(unsigned h, const uint8_t *bytes, size_t size)
@@ -323,13 +348,17 @@ void bridge_receive(unsigned h, const uint8_t *bytes, size_t size)
         // The first button snapshot after reconnect establishes the initial state.
         // A combined click/IMU packet may carry the best reference for this press.
         if (had_press_report && status.connected[h] && status.output.motion_valid &&
-            reset_button_pressed(profile.gyro_reset_button, h, v->buttons & ~old_buttons,
-                                 v->pressed_travel & ~old_travel) &&
+            binding_active(profile.gyro_reset_button, h, v->buttons & ~old_buttons,
+                           v->pressed_travel & ~old_travel) &&
             esp_timer_get_time() - status.motion_time_us < MOTION_TIMEOUT_US) {
             memcpy(gyro_zero, status.output.motion.gyro, sizeof(gyro_zero));
             ++status.gyro_zero_count;
             if (!wake) wake = motion_wake_locked();
         }
+        // A release packet can include an IMU reading from the held interval.
+        // Process this level transition after accepting the packet's sensor data.
+        if (v->buttons != old_buttons || v->pressed_travel != old_travel)
+            wake = update_gyro_hold_locked(wake);
     } else {
         ++status.bad;
     }
@@ -357,7 +386,7 @@ esp_err_t bridge_save(const pad_profile *p)
     nvs_handle_t nvs;
     esp_err_t err = nvs_open("framebridge", NVS_READWRITE, &nvs);
     if (err != ESP_OK) return err;
-    err = nvs_set_blob(nvs, "profile_v9", p, sizeof(*p));
+    err = nvs_set_blob(nvs, "profile_v10", p, sizeof(*p));
     if (err == ESP_OK) err = nvs_commit(nvs);
     nvs_close(nvs);
     if (err != ESP_OK) return err;
@@ -365,16 +394,22 @@ esp_err_t bridge_save(const pad_profile *p)
     uint8_t previous_hand = profile.motion_hand;
     unsigned wake = previous_hand != p->motion_hand ? reset_source_locked() : 0;
     if (profile.gyro_gain != p->gyro_gain && status.output.motion_valid) wake |= motion_wake_locked();
-    profile = *p;
     status.motion_hand = p->motion_hand;
     status.output.gyro_gain = p->gyro_gain;
     for (unsigned h = 0; h < HAND_COUNT; ++h) {
         status.hands[h].active = 0;
-        status.hands[h].pressed_travel = 0;
+        // A held trigger between its press and release thresholds stays held when
+        // saving unrelated settings. Reevaluate changed calibrations from rest.
+        for (unsigned i = 0; i < TRAVEL_SLOTS; ++i) {
+            if (memcmp(&profile.travel[h][i], &p->travel[h][i], sizeof(press_binding)))
+                status.hands[h].pressed_travel &= ~(1u << i);
+        }
         pad_update_travel(&status.hands[h], p->travel[h]);
         pad_update_touch(&status.hands[h], p->touch[h]);
     }
+    profile = *p;
     wake |= update_locked();
+    wake = update_gyro_hold_locked(wake);
     portEXIT_CRITICAL(&lock);
     if (previous_hand == MOTION_OFF && p->motion_hand != MOTION_OFF)
         ESP_ERROR_CHECK(esp_timer_start_periodic(motion_timer, MOTION_TIMEOUT_US / 4));
@@ -389,7 +424,8 @@ static bool read_profile(nvs_handle_t nvs)
     // Read large blobs into permanent storage before invoking the migration code.
     // NVS and migration never need large buffers on the main task's stack together.
     static const struct { const char *key; unsigned version; size_t length; } formats[] = {
-        {"profile_v9", 9, sizeof(profile)}, {"profile_v8", 8, V8_PROFILE_BYTES}, {"profile_v7", 7, V7_PROFILE_BYTES},
+        {"profile_v10", 10, sizeof(profile)}, {"profile_v9", 9, V9_PROFILE_BYTES},
+        {"profile_v8", 8, V8_PROFILE_BYTES}, {"profile_v7", 7, V7_PROFILE_BYTES},
         {"profile_v6", 6, V7_PROFILE_BYTES}, {"profile_v5", 5, V5_PROFILE_BYTES}
     };
     size_t size;

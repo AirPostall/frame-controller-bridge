@@ -110,9 +110,12 @@
 <p class="hint" id="gyro-gain-hint">Adjust the rotation speed sent to the app. Acceleration and the raw readings below stay at their original scale.</p>
 <div class="source-fields"><label for="gyro-reset-button">Gyro reset button</label><select id="gyro-reset-button" aria-describedby="gyro-reset-hint" disabled><option value="0">Unbound</option></select></div>
 <p class="hint" id="gyro-reset-hint">Hold the movement hand still and press the assigned button to zero its rotation rate. To recenter the camera too, use Bindings to map the same button to the game’s recenter control.</p>
+<div class="source-fields"><label for="gyro-hold-button">Hold to disable gyro</label><select id="gyro-hold-button" aria-describedby="gyro-hold-hint" disabled><option value="0">Unbound</option></select></div>
+<p class="hint" id="gyro-hold-hint">Hold the button while repositioning the controller, then release it to resume rotation from the same gyro zero. Acceleration, buttons and raw readings stay active.</p>
 <div class="input-line"><span>On-board source</span><span id="movement-status" role="status">Waiting for board</span></div>
 <div class="input-line"><span>Motion output</span><span id="movement-route">Waiting for board</span></div>
 <div class="input-line"><span>Successful gyro resets</span><span id="gyro-reset-count">—</span></div>
+<div class="input-line"><span>On-board gyro hold</span><span id="gyro-hold-status" role="status">Waiting for board</span></div>
 <div id="movement-axes" hidden>
   <h3>Raw controller counts</h3>
   <div class="input-line"><span>Acceleration X / Y / Z</span><code id="movement-accel">—</code></div>

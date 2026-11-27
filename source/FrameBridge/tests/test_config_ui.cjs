@@ -74,8 +74,8 @@ function fixtureDocument() {
 }
 
 async function testUI(document, EventType = Event) {
-  const profile = new Uint8Array(1737);
-  profile[0] = 9;
+  const profile = new Uint8Array(1738);
+  profile[0] = 10;
   profile[1735] = 100;
   profile.set([2,0,100,2,0,100],1728);
   for (let offset = 34; offset < 154; offset += 5) profile[offset] = 255;
@@ -105,7 +105,7 @@ async function testUI(document, EventType = Event) {
     up:[1,1], epoch:[1,1], seen:[3,3], masks:[32,1], travel:[2,0], active:[0,0],
     packets:[50,60], axes:[[0,0],[0,0]], usb:1, bluetoothMode:0, bluetooth:0, usbLayout:2, standardUsb:0,
     buttons:1 | 1<<4 | 1<<13, triggers:[0,0], hat:8, bad:0, overflows:0,
-    motion:{hand:0, samples:0, ageMs:-1, route:'none', zeroCount:0},
+    motion:{hand:0, samples:0, ageMs:-1, route:'none', zeroCount:0, gyroHeld:false},
   };
   const timers = new Map();
   let timerID = 0;
@@ -120,13 +120,13 @@ async function testUI(document, EventType = Event) {
       if (url === '/api/defaults' && method === 'GET') return new Response(profile);
       if (url === '/api/profile' && method === 'GET') return new Response(boardProfile);
       if (url === '/api/profile' && method === 'POST') {
-        assert.equal(body[0],9);
-        assert.equal(body.length,1737);
+        assert.equal(body[0],10);
+        assert.equal(body.length,1738);
         return new Response('OK');
       }
       if (url === '/api/profile' && method === 'PUT') {
         boardProfile = Uint8Array.from(body);
-        state.motion = {hand:boardProfile[1734], samples:0, ageMs:-1, route:'none', zeroCount:0};
+        state.motion = {hand:boardProfile[1734], samples:0, ageMs:-1, route:'none', zeroCount:0, gyroHeld:false};
         writes.push(boardProfile); return new Response('OK');
       }
       throw Error('Unexpected request ' + method + ' ' + url);
@@ -253,6 +253,10 @@ async function testUI(document, EventType = Event) {
   assert.equal(el('movement-hand').value,'0');
   assert.equal(el('gyro-gain').value,'100');
   assert.equal(el('gyro-reset-button').value,'0');
+  assert.equal(el('gyro-hold-button').value,'0');
+  assert.equal(content('gyro-hold-status'),'Unbound');
+  assert.deepEqual([...el('gyro-reset-button').children].map(o=>[o.value,o.textContent,o.hidden]),
+      [...el('gyro-hold-button').children].map(o=>[o.value,o.textContent,o.hidden]));
   const resetOption = value => [...el('gyro-reset-button').children].find(opt => opt.value === String(value));
   assert.match(resetOption(7).textContent, /left stick click/i);
   assert.match(resetOption(17).textContent, /right A/i);
@@ -271,6 +275,8 @@ async function testUI(document, EventType = Event) {
   assert.ok(el('save').disabled);
   change('movement-hand',2);
   change('gyro-reset-button',17);
+  change('gyro-hold-button',6);
+  assert.equal(content('gyro-hold-status'),'Unbound','A staged shortcut cannot mute the on-board stream');
   slide('gyro-gain',250);
   assert.equal(content('gyro-gain-value'),'250%');
   assert.equal(el('gyro-gain').getAttribute('aria-valuetext'),'250%');
@@ -455,6 +461,8 @@ async function testUI(document, EventType = Event) {
   assert.equal(boardProfile[1734],2);
   assert.equal(boardProfile[1735],250);
   assert.equal(boardProfile[1736],17);
+  assert.equal(boardProfile[1737],6);
+  assert.equal(readMask(boardProfile,5), outputs(5), 'A hold shortcut keeps its normal gamepad outputs');
   assert.equal(readMask(boardProfile,16), outputs(1,21), 'The reset button keeps its gamepad actions');
   assert.equal(readMask(boardProfile,17), outputs(4));
   assert.equal(readMask(boardProfile,7), 0);
@@ -481,16 +489,20 @@ async function testUI(document, EventType = Event) {
   assert.equal(el('movement-hand').value,'2');
   assert.equal(el('gyro-gain').value,'250');
   assert.equal(el('gyro-reset-button').value,'17');
+  assert.equal(el('gyro-hold-button').value,'6');
+  assert.equal(content('gyro-hold-status'),'Released');
   assert.match(resetOption(17).textContent, /Jump paddle \(Right A\)/);
   assert.equal(content('gyro-reset-count'),'0');
   state.motion.zeroCount = 1; await poll(); assert.equal(content('gyro-reset-count'),'1');
   assert.match(content('movement-status'),/right hand.*waiting/i);
   assert.match(content('movement-route'),/compatible host/i);
-  Object.assign(state.motion, {samples:4, ageMs:12, valid:true, accel:[-120,0,3200], gyro:[41,-80,-30]}); await poll();
+  Object.assign(state.motion, {samples:4, ageMs:12, valid:true, gyroHeld:true, accel:[-120,0,3200], gyro:[41,-80,-30]}); await poll();
   assert.equal(content('movement-status'),'Right hand');
+  assert.match(content('gyro-hold-status'),/held.*rotation muted/i);
   assert.equal(el('movement-axes').hidden,false);
   assert.equal(content('movement-accel'),'-120 / 0 / 3200');
   assert.equal(content('movement-gyro'),'41 / -80 / -30');
+  state.motion.gyroHeld = false; await poll(); assert.equal(content('gyro-hold-status'),'Released');
   slide('gyro-gain',25); await poll();
   assert.equal(content('movement-gyro'),'41 / -80 / -30', 'Sensitivity only scales outgoing data');
   assert.equal(el('movement-samples').hidden,false);
@@ -548,7 +560,7 @@ async function testUI(document, EventType = Event) {
   state.up[1] = 0; await poll();
   assert.match(content('trigger-right-levels'), /offline/i);
   tab('movement-tab','movement');
-  change('movement-hand',1); change('gyro-reset-button',34);
+  change('movement-hand',1); change('gyro-reset-button',34); change('gyro-hold-button',36);
   click('save'); await new Promise(resolve => setImmediate(resolve)); await poll();
   assert.match(content('movement-status'),/left hand/i);
   assert.equal(boardProfile[1735],25);
@@ -556,6 +568,7 @@ async function testUI(document, EventType = Event) {
   timers.clear(); document = fixtureDocument(); await loadPage();
   tab('movement-tab','movement');
   assert.equal(el('gyro-reset-button').value,'34');
+  assert.equal(el('gyro-hold-button').value,'36');
   assert.match(resetOption(34).textContent,/Left grab travel/);
   async function importProfile(profileBytes) {
     const json = JSON.stringify(require('../app/backup.js').encode(profileBytes));
@@ -563,10 +576,19 @@ async function testUI(document, EventType = Event) {
     assert.match(content('message'),/imported/i);
   }
   const withContact = boardProfile.slice(); withContact[1736] = 24;
+  withContact[1737] = 8;
   await importProfile(withContact);
   assert.equal(el('gyro-reset-button').value,'24');
   assert.equal(resetOption(24).hidden,false);
   assert.match(resetOption(24).textContent,/trigger touch/i);
+  assert.equal(el('gyro-hold-button').value,'8');
+  assert.equal(el('gyro-hold-button').children[8].hidden,false);
+  const prev = boardProfile.slice(0,1737); prev[0] = 9;
+  await importProfile(prev);
+  assert.equal(el('gyro-reset-button').value,'34', 'V9 preserves the reset shortcut');
+  assert.equal(el('gyro-hold-button').value,'0', 'V9 imports with the hold shortcut unbound');
+  assert.ok(el('gyro-hold-button').children[8].hidden);
+  assert.equal(boardProfile[1737],36);
   const old = boardProfile.slice(0,1736); old[0] = 8;
   await importProfile(old);
   assert.ok(resetOption(24).hidden);
@@ -575,16 +597,19 @@ async function testUI(document, EventType = Event) {
   assert.equal(el('gyro-gain').value,'25');
   assert.equal(boardProfile[1736],34,'Import is staged until saved');
   change('gyro-reset-button',7);
+  change('gyro-hold-button',17);
   click('defaults');
   assert.equal(el('movement-hand').value,'0');
   assert.equal(el('gyro-gain').value,'100');
   assert.equal(el('gyro-reset-button').value,'0');
+  assert.equal(el('gyro-hold-button').value,'0');
   assert.equal(boardProfile[1734],1, 'Restoring defaults stages the change');
   click('save'); await new Promise(resolve => setImmediate(resolve)); await poll();
   assert.equal(content('movement-status'),'Off');
   assert.equal(content('movement-route'),'Off');
   assert.equal(boardProfile[1735],100);
   assert.equal(boardProfile[1736],0);
+  assert.equal(boardProfile[1737],0);
 }
 
 module.exports = {html, testUI};

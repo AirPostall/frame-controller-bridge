@@ -61,7 +61,7 @@ static esp_err_t snapshot(httpd_req_t *req)
         "{\"raw\":[\"%s\",\"%s\"],\"seen\":[%u,%u],\"epoch\":[%lu,%lu],\"active\":[%u,%u],\"usb\":%u,\"bluetoothMode\":%u,\"bluetooth\":%u,\"usbLayout\":%u,\"standardUsb\":%u,\"up\":[%u,%u],\"masks\":[%u,%u],\"axes\":[[%d,%d],[%d,%d]],"
         "\"travel\":[%u,%u],\"packets\":[%lu,%lu],\"buttons\":%u,\"hat\":%u,"
         "\"triggers\":[%u,%u],\"bad\":%lu,\"overflows\":%lu,\"bluetoothOverflows\":%lu,"
-        "\"motion\":{\"hand\":%u,\"samples\":%lu,\"zeroCount\":%lu,\"ageMs\":%lld,\"valid\":%s,\"route\":\"%s\","
+        "\"motion\":{\"hand\":%u,\"samples\":%lu,\"zeroCount\":%lu,\"gyroHeld\":%s,\"ageMs\":%lld,\"valid\":%s,\"route\":\"%s\","
         "\"accel\":[%ld,%ld,%ld],\"gyro\":[%ld,%ld,%ld]}}",
         raw[0], raw[1], s.hands[0].seen, s.hands[1].seen,
         (unsigned long)s.epoch[0], (unsigned long)s.epoch[1], s.hands[0].active, s.hands[1].active,
@@ -73,7 +73,8 @@ static esp_err_t snapshot(httpd_req_t *req)
         pad_usb_buttons(&s.output), s.output.bytes[2],
         s.output.trigger_level[0], s.output.trigger_level[1],
         (unsigned long)s.bad, (unsigned long)s.overflows, (unsigned long)s.ble_overflows,
-        s.motion_hand, (unsigned long)s.motion_samples, (unsigned long)s.gyro_zero_count, (long long)age_ms,
+        s.motion_hand, (unsigned long)s.motion_samples, (unsigned long)s.gyro_zero_count,
+        s.gyro_held ? "true" : "false", (long long)age_ms,
         s.output.motion_valid ? "true" : "false", route,
         (long)motion->accel[0], (long)motion->accel[1], (long)motion->accel[2],
         (long)motion->gyro[0], (long)motion->gyro[1], (long)motion->gyro[2]);

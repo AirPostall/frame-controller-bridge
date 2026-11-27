@@ -4,7 +4,7 @@
 
 typedef struct {
     hand_state hands[HAND_COUNT];
-    bool connected[HAND_COUNT], usb, bluetooth_mode;
+    bool connected[HAND_COUNT], usb, bluetooth_mode, gyro_held;
     uint32_t epoch[HAND_COUNT], packets[HAND_COUNT], bad, overflows, ble_overflows;
     uint8_t motion_hand;
     uint32_t motion_samples, gyro_zero_count;

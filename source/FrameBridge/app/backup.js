@@ -15,7 +15,8 @@ const BindingBackup = (() => {
   const motionOffset = stickProfileSize;
   const gyroGainOffset = motionOffset + 1;
   const gyroResetOffset = gyroGainOffset + 1;
-  const profileSizes = [172, 174, stickOffset, stickProfileSize, stickProfileSize, gyroResetOffset, gyroResetOffset + 1];
+  const gyroHoldOffset = gyroResetOffset + 1;
+  const profileSizes = [172, 174, stickOffset, stickProfileSize, stickProfileSize, gyroResetOffset, gyroHoldOffset, gyroHoldOffset + 1];
   const size = version => Number.isInteger(version) ? (profileSizes[version - 3] || 0) : 0;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder('utf-8', {fatal:true, ignoreBOM:true});
@@ -79,18 +80,28 @@ const BindingBackup = (() => {
     checkGyroGain(profile, gain);
     profile[gyroGainOffset] = gain;
   }
-  function checkGyroResetButton(profile, button) {
-    if (profile[0] !== 9 || profile.length !== size(9)) throw Error('A gyro reset button requires a V9 profile.');
-    if (!bounded(button, sourceCount)) throw Error('Invalid gyro reset button.');
+  function checkGyroButton(profile, button, minVersion, label) {
+    if (profile[0] < minVersion || !size(profile[0]) || profile.length !== size(profile[0]))
+      throw Error('A gyro ' + label + ' button requires a V' + minVersion + ' or newer profile.');
+    if (!bounded(button, sourceCount)) throw Error('Invalid gyro ' + label + ' button.');
   }
   function gyroResetButton(profile) {
     const button = profile[gyroResetOffset];
-    checkGyroResetButton(profile, button);
+    checkGyroButton(profile, button, 9, 'reset');
     return button;
   }
   function setGyroResetButton(profile, button) {
-    checkGyroResetButton(profile, button);
+    checkGyroButton(profile, button, 9, 'reset');
     profile[gyroResetOffset] = button;
+  }
+  function gyroHoldButton(profile) {
+    const button = profile[gyroHoldOffset];
+    checkGyroButton(profile, button, 10, 'hold');
+    return button;
+  }
+  function setGyroHoldButton(profile, button) {
+    checkGyroButton(profile, button, 10, 'hold');
+    profile[gyroHoldOffset] = button;
   }
   function checkSource(source) {
     if (!bounded(source, sourceCount - 1)) throw Error('Invalid press source.');
@@ -234,6 +245,7 @@ const BindingBackup = (() => {
       result.gyro_gain = gyroGain(profile);
     }
     if (version >= 9) result.gyro_reset_button = gyroResetButton(profile);
+    if (version >= 10) result.gyro_hold_button = gyroHoldButton(profile);
     return result;
   }
 
@@ -257,9 +269,9 @@ const BindingBackup = (() => {
     }
   }
 
-  function decode(data, targetVersion = 9) {
+  function decode(data, targetVersion = 10) {
     if (data?.format !== format || data.version !== 1 || !size(data.profileVersion) || !size(targetVersion))
-      throw Error('Choose a Frame Bridge bindings backup (profile versions 3–9).');
+      throw Error('Choose a Frame Bridge bindings backup (profile versions 3–10).');
     const version = data.profileVersion;
     if (version > targetVersion) throw Error('This backup requires V' + version + ' firmware.');
     const result = new Uint8Array(size(targetVersion));
@@ -267,6 +279,7 @@ const BindingBackup = (() => {
     if (version >= 8) setMotionHand(result, data.motion_hand);
     if (targetVersion >= 8) setGyroGain(result, version >= 8 ? data.gyro_gain : 100);
     if (version >= 9) setGyroResetButton(result, data.gyro_reset_button);
+    if (version >= 10) setGyroHoldButton(result, data.gyro_hold_button);
     [data.left, data.right].forEach((hand, side) => {
       if (typeof hand?.stickEnabled !== 'boolean') throw Error('Missing stick setting.');
       if (hand.stickEnabled) result[1] |= 1 << side;
@@ -305,7 +318,7 @@ const BindingBackup = (() => {
   }
 
   return {encode, decode, mask, setMask, name, setName, stick, setStick, motionHand, setMotionHand,
-    gyroGain, setGyroGain, gyroResetButton, setGyroResetButton,
+    gyroGain, setGyroGain, gyroResetButton, setGyroResetButton, gyroHoldButton, setGyroHoldButton,
     motionOffset, size, triggerOffset, physicalTravel, triggerTouchSlots};
 })();
 if (typeof module !== 'undefined') module.exports = BindingBackup;

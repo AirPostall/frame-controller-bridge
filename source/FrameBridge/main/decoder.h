@@ -15,7 +15,8 @@ enum { CONTACT_BYTES = 14, RAW_CHANNELS = 18, TOUCH_SLOTS = 12, LEFT_TOUCH_SLOTS
        TRAVEL_SLOTS = 3, LEGACY_PROFILE_BYTES = 174, V3_PROFILE_BYTES = 172, V4_PROFILE_BYTES = 174,
        CLICK_SOURCES = HAND_COUNT * 16, PRESS_SOURCES = CLICK_SOURCES + HAND_COUNT * TRAVEL_SLOTS,
        NAME_SLOTS = PRESS_SOURCES + ACTION_COUNT - 1, NAME_BYTES = 24,
-       V5_PROFILE_BYTES = 1728, V7_PROFILE_BYTES = 1734, V8_PROFILE_BYTES = 1736, PROFILE_VERSION = 9,
+       V5_PROFILE_BYTES = 1728, V7_PROFILE_BYTES = 1734, V8_PROFILE_BYTES = 1736, V9_PROFILE_BYTES = 1737,
+       PROFILE_VERSION = 10,
        TRIGGER_PHYSICAL_TRAVEL = HAND_COUNT * TOUCH_SLOTS + 1,
        TRIGGER_TRAVEL_CHANNEL = 2, TRIGGER_RAW = CONTACT_BYTES + 1 };
 enum { WHOLE_BYTE, LOW_NIBBLE, HIGH_NIBBLE, BIT_ZERO, BIT_SEVEN = BIT_ZERO + 7 };
@@ -54,7 +55,8 @@ typedef struct {
     uint8_t names[NAME_SLOTS][NAME_BYTES];
     stick_settings sticks[HAND_COUNT];
     uint8_t motion_hand, gyro_gain; // Gyroscope gain as a percentage.
-    uint8_t gyro_reset_button;      // 0 = unbound, otherwise 1 + click or travel press-source index.
+    // Independent bindings: 0 = unbound, otherwise 1 + click or travel press-source index.
+    uint8_t gyro_reset_button, gyro_hold_button;
 } pad_profile;
 
 typedef struct {
