@@ -30,6 +30,11 @@ size_t pro3_encode_controls(const pad_report *report, uint8_t out[PRO3_CONTROL_B
         17, 18,        // L4, R4
     };
     unsigned buttons = pad_usb_buttons(report);
+    // Generic USB exposes the calibrated trigger thresholds as buttons. On Pro 3,
+    // keep their digital contacts released while the corresponding axis is partial.
+    for (unsigned trigger = 0; trigger < 2; ++trigger) {
+        if (report->trigger_level[trigger] < 255) buttons &= ~(1U << (11 + trigger));
+    }
     for (unsigned i = 0; i < sizeof(usage); ++i) {
         if (buttons & (1U << i)) {
             unsigned bit = usage[i] - 1;

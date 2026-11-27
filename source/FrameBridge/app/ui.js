@@ -9,11 +9,10 @@ const pro3Outputs = ['Off', 'A', 'B', 'X', 'Y', 'L1', 'R1', 'Select', 'Start',
   'L2', 'R2', 'PL', 'PR', 'Home', 'L4', 'R4'];
 const pro3RowTitles = {7:'− Select', 8:'+ Start', 20:'Home (alternate binding)'};
 const measuredButtons = [
-  {0:'D-pad down', 1:'D-pad right', 2:'D-pad left', 3:'D-pad up', 5:'bumper', 6:'stick click', 7:'L2', 8:'Steam', 9:'View'},
-  {0:'A', 1:'B', 2:'X', 3:'Y', 5:'bumper', 6:'stick click', 7:'R2', 8:'Steam', 9:'Menu'}
+  {0:'D-pad down', 1:'D-pad right', 2:'D-pad left', 3:'D-pad up', 5:'bumper', 6:'stick click', 7:'trigger touch', 8:'Steam', 9:'View'},
+  {0:'A', 1:'B', 2:'X', 3:'Y', 5:'bumper', 6:'stick click', 7:'trigger touch', 8:'Steam', 9:'Menu'}
 ];
 const usbLayouts = ['Extended', 'Standard', 'Wired Pro 3'];
-const triggerSelectors = ['lt-source', 'rt-source'];
 const travelOffset = index => 154 + 3*index;
 let defaultProfile, pull=null;
 const sides = ['Left', 'Right'];
@@ -129,7 +128,6 @@ function steamButtonName(hand, bit, profile = draft) {
   const alias = profile && BindingBackup.name(profile, hand * 16 + bit);
   if (alias) return alias;
   const name = measuredButtons[hand]?.[bit];
-  if (bit === 7) return name;
   return sides[hand] + (name ? ' ' + name : ' button bit ' + bit);
 }
 
@@ -172,9 +170,9 @@ function sourceLines(id, entries) {
 const triggerEditors = ['left', 'right'].map((side, h) => {
   const field = name => byId('trigger-' + side + '-' + name);
   return {
-    h, offset:travelOffset(h*3), source:32+h*3, click:h*16+7, output:1 << (15+h),
-    channel:field('channel'), release:field('release'), engage:field('engage'),
-    apply:field('apply'), exclusive:field('exclusive'), note:field('note'), levels:field('levels')
+    h, offset:travelOffset(h*3), source:32+h*3, output:1 << (15+h),
+    release:field('release'), engage:field('engage'),
+    apply:field('apply'), bind:field('bind'), note:field('note'), levels:field('levels')
   };
 });
 
@@ -186,8 +184,7 @@ function updateTriggerLevels(state) {
       if (!state.up[h]) message = 'Controller offline';
       else if (!(state.seen[h] & 2)) message = 'Waiting for trigger travel';
       else {
-        const [first, second] = travelBytes(state, h);
-        message = 'Byte 6 · ' + first + ' / 255  |  Byte 7 · ' + second + ' / 255';
+        message = '0x14 byte 7 · ' + travelBytes(state, h)[1] + ' / 255';
       }
     }
     if (levels.textContent !== message) levels.textContent = message;
@@ -195,10 +192,8 @@ function updateTriggerLevels(state) {
 }
 
 function triggerValuesChanged(editor) {
-  const {channel, release, engage, offset} = editor;
-  const selected = Number(channel.value);
-  return selected !== draft[offset] || (selected !== 0 &&
-    (release.valueAsNumber !== draft[offset+1] || engage.valueAsNumber !== draft[offset+2]));
+  const {release, engage, offset} = editor;
+  return release.valueAsNumber !== draft[offset+1] || engage.valueAsNumber !== draft[offset+2];
 }
 
 function refreshTriggerSettings() {
@@ -206,52 +201,22 @@ function refreshTriggerSettings() {
   if (!draft) return;
   updateTriggerLevels(latest);
   for (const editor of triggerEditors) {
-    const {channel, release, engage, offset, apply, exclusive, source, click, output} = editor;
+    const {release, engage, offset, apply, bind, source, output} = editor;
     const calibration = draft.slice(offset, offset+3).join(',');
     if (editor.profile !== draft || editor.calibration !== calibration) {
       if (editor.profile !== draft) editor.note.textContent = '';
       editor.profile = draft;
       editor.calibration = calibration;
-      channel.value = String(draft[offset]);
-      release.value = draft[offset] ? String(draft[offset+1]) : '';
-      engage.value = draft[offset] ? String(draft[offset+2]) : '';
+      release.value = String(draft[offset+1]);
+      engage.value = String(draft[offset+2]);
     }
-    channel.disabled = saving;
-    release.disabled = engage.disabled = saving || Number(channel.value) === 0;
+    release.disabled = engage.disabled = saving;
     const pending = triggerValuesChanged(editor);
     apply.disabled = saving || !pending;
     if (pending && currentView === 'mapping') byId('save').disabled = true;
-    exclusive.hidden = !draft[offset] ||
-      (!(BindingBackup.mask(draft, click) & output) && !!(BindingBackup.mask(draft, source) & output));
-    exclusive.disabled = saving || pending;
+    bind.hidden = !!(BindingBackup.mask(draft, source) & output);
+    bind.disabled = saving || pending;
   }
-}
-
-function refreshTriggerSources() {
-  refreshTriggerSettings();
-  const enabled = hasAnalog(latest) && draft?.[0] >= 4;
-  byId('analog-routing').hidden = !enabled;
-  if (!enabled) return;
-  triggerSelectors.forEach((id, output) => {
-    const select = byId(id);
-    select.replaceChildren();
-    const add = (value, name) => {
-      const option = document.createElement('option');
-      option.value = String(value);
-      option.textContent = name;
-      select.append(option);
-    };
-    add(0, 'Digital press only');
-    Touch.slots.forEach((slots, h) => slots.forEach((name, i) => {
-      const o = Touch.offset(h, i);
-      if (draft[o] !== Touch.empty) {
-        const suffix = draft[o + 1] >= 3 ? ' (on/off)' : '';
-        add(1 + h * 12 + i, sides[h] + ' ' + name + suffix);
-      }
-    }));
-    select.value = String(draft[BindingBackup.triggerOffset + output]);
-    select.disabled = saving;
-  });
 }
 
 async function request(path, options={}) {
@@ -279,7 +244,7 @@ function redrawBindings() {
   byId('sensors').inert = saving;
   byId('joysticks').inert = saving;
   refreshSensorEditor();
-  refreshTriggerSources();
+  refreshTriggerSettings();
   refreshSourceEditor();
   byId('output-rename').hidden = !renaming;
   byId('cancel').hidden = !learning && !renaming;
@@ -357,7 +322,7 @@ function learnFrom(state) {
   // A reconnect or a button already held when learning starts is not a new press.
   const edges=[];
   for(let h=0;h<2;h++) if(state.up[h] && previousUp[h]) {
-    const rising=state.masks[h] & ~previousMasks[h];
+    const rising=state.masks[h] & ~previousMasks[h] & ~(1 << 7);
     for(let b=0;b<16;b++) if(rising & (1<<b)) edges.push([h,b]);
   }
   previousMasks=state.masks.slice(); previousUp=state.up.slice();
@@ -396,7 +361,7 @@ function buildLiveBindings(profile, layout, analog) {
       status.className = 'live-status';
       row.append(source, target, status);
       list.append(row);
-      const block = offset !== undefined && profile[offset] < 14 ? 1 : 2;
+      const block = kind === 'touch' && profile[offset] < 14 ? 1 : 2;
       liveRows.push({row, status, h, kind, index, offset, block});
     }
     function pressOutputs(source) {
@@ -418,15 +383,14 @@ function buildLiveBindings(profile, layout, analog) {
         add('travel', i, physicalSourceName(source, profile) + ' · byte ' + (5 + channel), outputs);
       }
     }
+    if (analog) {
+      const {offset, source} = triggerEditors[h];
+      add('physical', h, physicalSourceName(source, profile) + ' · byte 7', outputName(16 + h, 2, profile) + ' level', offset);
+    }
     Touch.slots[h].forEach((surface, slot) => {
       const offset = Touch.offset(h, slot), action = profile[offset + 4];
       if (profile[offset] === Touch.empty) return;
       if (action) add('touch', slot, surface + ' touch', outputName(action, layout, profile), offset);
-      if (!analog) return;
-      for (let output = 0; output < 2; ++output) {
-        if (profile[BindingBackup.triggerOffset + output] === 1 + h * 12 + slot)
-          add('analog', output, surface + ' touch', outputName(16 + output, 2, profile) + ' level', offset);
-      }
     });
     empty.hidden = list.children.length > 0;
     empty.textContent = 'No saved bindings for this hand.';
@@ -449,13 +413,9 @@ function updateLiveBindings(state) {
       style = 'waiting';
       value = 'Waiting for input';
       if (state.seen[h] & block) {
-        if (kind === 'analog') {
-          // Display only this touch source. A separate digital press can override the USB level.
-          const channel = saved[offset];
-          const byte = parseInt(state.raw[h].slice(2 * channel, 2 * channel + 2), 16);
-          const sample = Touch.value(byte, saved[offset + 1]);
-          const release = saved[offset + 2], engage = saved[offset + 3];
-          const level = Math.max(0, Math.min(255, Math.round(255 * (sample - release) / (engage - release))));
+        if (kind === 'physical') {
+          const sample = travelBytes(state, h)[1];
+          const level = saved[offset + 2] > saved[offset + 1] ? sample : 255 - sample;
           style = level ? 'active' : 'released';
           value = level + ' / 255';
         } else {
@@ -526,8 +486,8 @@ async function poll() {
       const previousSaved = saved;
       const p=await request('/api/profile');
       if (!defaultProfile || p[0] !== defaultProfile[0]) defaultProfile=await request('/api/defaults');
-      if (p[0] !== 6 || p[0] !== defaultProfile[0] ||
-          [p,defaultProfile].some(x => x.length !== BindingBackup.size(6))) {
+      if (p[0] !== 7 || p[0] !== defaultProfile[0] ||
+          [p,defaultProfile].some(x => x.length !== BindingBackup.size(7))) {
         throw Error('Reload setup to match the board firmware.');
       }
       if (saved === previousSaved && (!saved || p.length !== saved.length || p.some((v,i) => v !== saved[i]))) {
@@ -592,6 +552,7 @@ for (let action = 1; action < names.length; ++action) {
   check.type = 'checkbox';
   check.id = 'source-output-' + action;
   check.onchange = () => {
+    if (check.disabled) return;
     const old = BindingBackup.mask(draft, selectedSource), flag = outputFlag(action);
     BindingBackup.setMask(draft, selectedSource, check.checked ? old | flag : old & ~flag);
     endBinding();
@@ -621,7 +582,7 @@ function refreshSourceEditor() {
   for (const [i, {check, caption}] of sourceChecks.entries()) {
     const action = i + 1, title = outputTitle(action, outputLayout(latest));
     check.checked = !!(mask & outputFlag(action));
-    check.disabled = locked;
+    check.disabled = locked || selectedSource === 7 || selectedSource === 23;
     if (caption.textContent !== title) caption.textContent = title;
   }
 }
@@ -744,12 +705,18 @@ function travelBytes(state,h) {
 byId('pull-capture').onclick=()=>{
   if(!learning || !pull || !latest) return;
   const held=travelBytes(latest,pull.hand);
+  const trigger = learning === 16 || learning === 17;
   const candidates=[];
   held.forEach((v,i)=>{
+    if(trigger && i!==1) return;
     const delta=v-pull.rest[i];
     if(Math.abs(delta)>=12) candidates.push({channel:i+1,rest:pull.rest[i],delta});
   });
-  if(!candidates.length) {bindingNote('No clear press travel in either field. Hold the physical press and retry.');return;}
+  if(!candidates.length) {
+    bindingNote(trigger ? 'No clear travel in byte 7. Hold the trigger and retry.' :
+      'No clear press travel in either field. Hold the physical press and retry.');
+    return;
+  }
   pull.candidates=candidates;
   const select=byId('pull-channel');
   select.replaceChildren();
@@ -785,8 +752,8 @@ names.forEach((name,i)=>{
   byId('sensor-action').append(option);
 });
 for (const editor of triggerEditors) {
-  const {channel, release, engage, apply, exclusive, offset, click, source, output} = editor;
-  for (const field of [channel, release, engage]) {
+  const {release, engage, apply, bind, offset, source, output} = editor;
+  for (const field of [release, engage]) {
     field.oninput = field.onchange = () => {
       if (!draft || saving) return;
       const pending = triggerValuesChanged(editor);
@@ -797,36 +764,23 @@ for (const editor of triggerEditors) {
   }
   apply.onclick = () => {
     if (!draft || saving) return;
-    const selected = Number(channel.value);
     const releaseAt = release.valueAsNumber, engageAt = engage.valueAsNumber;
-    if (selected && (![releaseAt, engageAt].every(n => Number.isInteger(n) && n >= 0 && n <= 255) ||
-        releaseAt === engageAt)) {
+    if (![releaseAt, engageAt].every(n => Number.isInteger(n) && n >= 0 && n <= 255) ||
+        releaseAt === engageAt) {
       editor.note.textContent = 'Enter two different whole numbers from 0 to 255.';
       return;
     }
-    if (selected && !draft[offset] && !BindingBackup.mask(draft, source))
-      BindingBackup.setMask(draft, source, output);
-    draft.set(selected ? [selected, releaseAt, engageAt] : [0,0,0], offset);
-    editor.note.textContent = selected ? 'Trigger values staged. Save to board to apply.' :
-      'Trigger travel turned off. Save to board to apply.';
+    draft.set([releaseAt, engageAt], offset + 1);
+    editor.note.textContent = 'Trigger values staged. Save to board to apply.';
     redrawBindings();
   };
-  exclusive.onclick = () => {
-    if (!draft?.[offset] || saving || triggerValuesChanged(editor)) return;
+  bind.onclick = () => {
+    if (!draft || saving || triggerValuesChanged(editor)) return;
     BindingBackup.setMask(draft, source, BindingBackup.mask(draft, source) | output);
-    BindingBackup.setMask(draft, click, BindingBackup.mask(draft, click) & ~output);
-    editor.note.textContent = 'Trigger output assigned to travel. Save to board to apply.';
+    editor.note.textContent = 'Digital trigger click assigned to travel. Save to board to apply.';
     redrawBindings();
   };
 }
-triggerSelectors.forEach((id, side) => {
-  byId(id).onchange = e => {
-    if (saving || !hasAnalog(latest) || !(draft?.[0] >= 4)) return;
-    draft[BindingBackup.triggerOffset + side] = Number(e.target.value);
-    note('Trigger source changed. Save to apply.');
-    redrawBindings();
-  };
-});
 byId('cancel').onclick=()=>{endBinding(renaming ? 'Rename canceled.' : 'Learning canceled.');redrawBindings();};
 byId('defaults').onclick=()=>{draft=defaultProfile.slice();previews=[0,0];stopWizard('Defaults staged. Save to apply.');
   endBinding();note('Defaults restored in this view. Save to apply.');redrawBindings();};
@@ -965,16 +919,9 @@ function refreshSurfaceLists() {
       label(id+'-output','');
       label(id+'-signal','Waiting for profile');
     }else{
-      const action=draft[offset+4], outputs=[];
-      if(action) outputs.push(lastTouchLayout===undefined ? names[action] : outputName(action,lastTouchLayout));
-      if(draft[0]>=4){
-        const source=1+side*12+index;
-        for(let trigger=0;trigger<2;trigger++){
-          if(draft[BindingBackup.triggerOffset+trigger]===source)
-            outputs.push(outputName(16+trigger,2)+(lastTouchLayout===2?' (analog)':' (Bluetooth / Pro 3 analog)'));
-        }
-      }
-      label(id+'-output', outputs.length ? 'Output · '+outputs.join(' + ') : calibrated ? 'No output assigned' : '');
+      const action=draft[offset+4];
+      label(id+'-output', action ? 'Output · '+outputName(action,lastTouchLayout) :
+        calibrated || index === BindingBackup.triggerTouchSlots[side] ? 'No output assigned' : '');
       const signal=calibrated ? Touch.source(draft[offset],draft[offset+1],side)+
         (draft[offset+1]>=3 ? ' · on/off' : ' · engage '+draft[offset+3]+' / release '+draft[offset+2])
         : (side===1 && index===7 ? '0x19 byte 5 · uncalibrated' : 'Uncalibrated');
@@ -995,7 +942,7 @@ function refreshSensorEditor() {
   byId('surface-back').disabled=saving || !!wizard;
   byId('sensor-learn').disabled=locked || !latest?.up[hand];
   byId('sensor-clear').disabled=locked || !has;
-  byId('sensor-action').disabled=locked || !has;
+  byId('sensor-action').disabled=locked || !has || slot === BindingBackup.triggerTouchSlots[hand];
   byId('sensor-action').value=String(draft?.[o+4] || 0);
   for(const [id,index] of [['release',2],['engage',3]]){
     const el=byId(id);
@@ -1119,19 +1066,7 @@ byId('capture').onclick=()=>{
 byId('stop-capture').onclick=()=>{stopWizard('Capture canceled.');redrawBindings();};
 byId('sensor-clear').onclick=()=>{
   alternatives=[]; draft.set([Touch.empty,0,0,0,0],bindOffset());previews[hand]&=~(1<<slot);
-  const removed = [];
-  if (draft[0] >= 4) {
-    const source = 1 + hand * 12 + slot;
-    triggerSelectors.forEach((_, side) => {
-      const offset = BindingBackup.triggerOffset + side;
-      if (draft[offset] === source) {
-        draft[offset] = 0;
-        removed.push(sides[side].toLowerCase()+' trigger');
-      }
-    });
-  }
-  const message = removed.length ? ' Cleared touch routing to '+removed.join(' and ')+'.' : '';
-  sensorNote('Calibration cleared.'+message+' Save to apply.');redrawBindings();
+  sensorNote('Calibration cleared. Save to apply.');redrawBindings();
 };
 for(const [id,index] of [['release',2],['engage',3]]) {
   byId(id).onchange=e=>{
@@ -1144,5 +1079,8 @@ for(const [id,index] of [['release',2],['engage',3]]) {
     sensorNote('Sensitivity changed. Save to apply.');redrawBindings();
   };
 }
-byId('sensor-action').onchange=e=>{draft[bindOffset()+4]=Number(e.target.value);redrawBindings();};
+byId('sensor-action').onchange=e=>{
+  if(e.target.disabled) return;
+  draft[bindOffset()+4]=Number(e.target.value);redrawBindings();
+};
 createSurfaceLists();redrawBindings();poll();

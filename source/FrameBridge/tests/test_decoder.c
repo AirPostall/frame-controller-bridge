@@ -29,86 +29,62 @@ static void check_sticks(const pad_report *report, const int16_t expected[4])
     }
 }
 
-static void test_touch_triggers(void)
+static void test_trigger_input_isolation(void)
 {
     pad_profile p;
     pad_defaults(&p);
-    p.trigger_source[0] = 13;  // Right A touch drives left trigger.
-    p.trigger_source[1] = 1;   // Left D-pad touch drives right trigger.
-    p.touch[1][0] = (touch_binding){3, WHOLE_BYTE, 50, 150, PAD_A};
-    p.touch[0][0] = (touch_binding){5, HIGH_NIBBLE, 170, 34, 0};
+    p.touch[0][2] = (touch_binding){5, HIGH_NIBBLE, 34, 170, UNBOUND};
+    p.touch[1][5] = (touch_binding){3, WHOLE_BYTE, 50, 150, UNBOUND};
+    bind_outputs(&p, 4, bit_for(PAD_RT)); // An independent digital binding.
     assert(pad_profile_valid(&p));
-
-    hand_state hands[HAND_COUNT] = {0};
-    uint8_t left[16] = {0x19, CONTACT_BYTES};
-    uint8_t right[16] = {0x19, CONTACT_BYTES};
-    left[7] = 0x6f;
-    assert(pad_touch_level(&hands[0], &p.touch[0][0]) == -1);
-    assert(pad_decode(&hands[0], left, sizeof(left)));
-    assert(pad_touch_level(&hands[0], &p.touch[0][0]) == 102);
-    assert(pad_touch_level(&hands[0], &p.touch[0][1]) == -1);
-    pad_report r = pad_compose(hands, &p);
-    assert(r.trigger_level[0] == 0 && r.trigger_level[1] == 128);
-
-    // Both endpoints saturate, and movement between them reaches USB before the
-    // digital touch threshold fires. The calibrated touch can still have its own action.
-    const uint8_t inputs[] = {40, 50, 51, 100, 149, 150, 255};
-    const uint8_t expected[] = {0, 0, 3, 128, 252, 255, 255};
-    for (size_t i = 0; i < sizeof(inputs); ++i) {
-        right[5] = inputs[i];
-        assert(pad_decode(&hands[1], right, sizeof(right)));
-        pad_update_touch(&hands[1], p.touch[1]);
-        r = pad_compose(hands, &p);
-        assert(r.trigger_level[0] == expected[i]);
-        assert(!!(pad_usb_buttons(&r) & 1) == (inputs[i] >= 150));
-        assert(r.trigger_level[1] == 128);
+    for (unsigned h = 0; h < HAND_COUNT; ++h) {
+        const press_binding *travel = &p.travel[h][0];
+        assert(travel->channel == 2 && travel->release == 64 && travel->engage == 128);
+        assert(outputs_at(&p, CLICK_SOURCES + h * TRAVEL_SLOTS) == bit_for(PAD_LT + h));
     }
 
-    // A real digital trigger binding overrides the current analog touch level.
-    right[5] = 100;
-    assert(pad_decode(&hands[1], right, sizeof(right)));
-    bind_outputs(&p, 0, bit_for(PAD_LT));
-    hands[0].buttons = 1;
-    assert(pad_compose(hands, &p).trigger_level[0] == 255);
-    hands[0].buttons = 0;
-    assert(pad_compose(hands, &p).trigger_level[0] == 128);
+    hand_state hands[HAND_COUNT] = {0};
+    uint8_t contact[2 + CONTACT_BYTES] = {0x19, CONTACT_BYTES};
+    memset(contact + 2, 255, CONTACT_BYTES);
+    for (unsigned h = 0; h < HAND_COUNT; ++h) {
+        assert(pad_decode(&hands[h], contact, sizeof(contact)));
+        pad_update_touch(&hands[h], p.touch[h]);
+        assert(hands[h].active != 0); // Contact is still available to the monitor.
+    }
+    pad_report r = pad_compose(hands, &p);
+    assert(!pad_usb_buttons(&r) && !r.trigger_level[0] && !r.trigger_level[1]);
 
-    left[7] = 0x0f; // Falling calibration caps low raw input at full output.
-    assert(pad_decode(&hands[0], left, sizeof(left)));
-    assert(pad_compose(hands, &p).trigger_level[1] == 255);
-    left[7] = 0xb0;
-    assert(pad_decode(&hands[0], left, sizeof(left)));
-    assert(pad_compose(hands, &p).trigger_level[1] == 0);
-
-    // A press-block signal must first be seen on its own hand. Packed modes
-    // share the decoder used for thresholded touch. Unknown blocks retain state.
-    p.touch[0][0] = (touch_binding){14, LOW_NIBBLE, 0, 255, 0};
-    assert(pad_profile_valid(&p));
-    assert(pad_compose(hands, &p).trigger_level[1] == 0);
-    uint8_t press[10] = {0x14, 8};
-    press[8] = 0xaf;
+    uint8_t press[] = {0x14, 8, 0x90, 0, 0, 0, 0, 0, 255, 75};
     assert(pad_decode(&hands[0], press, sizeof(press)));
-    p.trigger_source[0] = p.trigger_source[1];
+    pad_update_travel(&hands[0], p.travel[0]);
     r = pad_compose(hands, &p);
-    assert(r.trigger_level[0] == 255 && r.trigger_level[1] == 255);
+    assert(r.trigger_level[0] == 75 && !r.trigger_level[1]);
+    assert(pad_usb_buttons(&r) == (1U << 12)); // Digital R2 cannot force either axis.
+    press[2] = 0;
+    press[8] = 0;
+    assert(pad_decode(&hands[0], press, sizeof(press)));
+    pad_update_travel(&hands[0], p.travel[0]);
+    memset(contact + 2, 0, CONTACT_BYTES);
+    assert(pad_decode(&hands[0], contact, sizeof(contact)));
+    pad_update_touch(&hands[0], p.touch[0]);
+    assert(!hands[0].active);
+    r = pad_compose(hands, &p);
+    assert(!pad_usb_buttons(&r) && r.trigger_level[0] == 75 && !r.trigger_level[1]);
+
+    // Packed fields remain available for other calibrated surfaces.
+    p.touch[0][0] = (touch_binding){14, LOW_NIBBLE, 0, 255, UNBOUND};
     press[8] = 0xa2;
     assert(pad_decode(&hands[0], press, sizeof(press)));
     assert(pad_decode(&hands[0], (uint8_t[]){0x1a, 0}, 2));
-    assert(pad_compose(hands, &p).trigger_level[0] == 34);
+    assert(pad_touch_level(&hands[0], &p.touch[0][0]) == 34);
     p.touch[0][0].mode = BIT_ZERO + 1;
-    assert(pad_compose(hands, &p).trigger_level[0] == 255);
+    assert(pad_touch_level(&hands[0], &p.touch[0][0]) == 255);
     p.touch[0][0].mode = BIT_ZERO;
-    assert(pad_compose(hands, &p).trigger_level[0] == 0);
-    p.touch[0][0] = (touch_binding){14, WHOLE_BYTE, 255, 0, 0};
+    assert(pad_touch_level(&hands[0], &p.touch[0][0]) == 0);
     hands[0] = (hand_state){0};
+    assert(pad_touch_level(&hands[0], &p.touch[0][0]) == -1);
     r = pad_compose(hands, &p);
-    assert(r.trigger_level[0] == 0 && r.trigger_level[1] == 0);
-
-    for (unsigned source = 1; source <= 255; ++source) {
-        p.trigger_source[0] = (uint8_t)source;
-        bool valid = source == 1 || source == 13;
-        assert(pad_profile_valid(&p) == valid);
-    }
+    assert(!r.trigger_level[0] && !r.trigger_level[1]);
 }
 
 static void test_legacy_profile_upgrade(void)
@@ -136,13 +112,20 @@ static void test_legacy_profile_upgrade(void)
         assert(pad_profile_load(&destination, bytes, length));
         assert(destination.version == PROFILE_VERSION && destination.stick_flags == 3);
         assert(!memcmp(destination.touch, bytes + 34, 120));
-        assert(!memcmp(destination.travel, bytes + 154, 18));
-        assert(destination.trigger_source[0] == 0);
-        assert(destination.trigger_source[1] == (version == 4 ? 24 : 0));
+        for (unsigned h = 0; h < HAND_COUNT; ++h) {
+            unsigned offset = 154 + h * TRAVEL_SLOTS * sizeof(press_binding);
+            const press_binding *travel = destination.travel[h];
+            assert(travel[0].channel == 2);
+            assert(travel[0].release == (version == 3 ? 64 : 25));
+            assert(travel[0].engage == (version == 3 ? 128 : 100));
+            assert(!memcmp(travel + 1, bytes + offset + 3, 6)); // both grab stages
+            assert(destination.trigger_source[h] == TRIGGER_PHYSICAL_TRAVEL);
+        }
         for (unsigned i = 0; i < 38; ++i) {
             uint32_t expected = 0;
             if (i == 16 + 14) expected = bit_for(PAD_R_GRAB_FULL);
-            if (i >= 32 && bytes[154 + 3*(i - 32)]) expected = bit_for(legacy_travel[i - 32]);
+            if (i >= 32 && ((i - 32) % TRAVEL_SLOTS == 0 || bytes[154 + 3*(i - 32)]))
+                expected = bit_for(legacy_travel[i - 32]);
             assert(outputs_at(&destination, i) == expected);
         }
         assert(!memcmp(destination.names, (uint8_t[60][24]){{0}}, sizeof(destination.names)));
@@ -159,6 +142,71 @@ static void test_legacy_profile_upgrade(void)
     }
 }
 
+static void test_trigger_contact_upgrade(void)
+{
+    pad_profile old, loaded;
+    pad_defaults(&old);
+    old.trigger_source[0] = 0;
+    old.trigger_source[1] = 18; // Legacy continuous right trigger touch route.
+    old.touch[1][5] = (touch_binding){2, HIGH_NIBBLE, 17, 238, PAD_A};
+    old.touch[0][2] = (touch_binding){0, BIT_ZERO, 0, 255, PAD_LT};
+    old.touch[1][8] = (touch_binding){1, BIT_ZERO, 0, 255, PAD_B};
+    old.travel[0][0] = (press_binding){1, 180, 90}; // Preserve falling hysteresis.
+    old.travel[1][0] = (press_binding){0, 0, 0};
+    bind_outputs(&old, 7, bit_for(PAD_LT) | bit_for(PAD_A));
+    bind_outputs(&old, 23, bit_for(PAD_RT) | bit_for(PAD_LT));
+    bind_outputs(&old, CLICK_SOURCES, bit_for(PAD_X));
+    bind_outputs(&old, CLICK_SOURCES + TRAVEL_SLOTS, 0);
+    bind_outputs(&old, 4, bit_for(PAD_RT)); // Independent custom button.
+    for (unsigned version = 5; version <= 7; ++version) {
+        old.version = version;
+        size_t size = version == 5 ? V5_PROFILE_BYTES : sizeof(old);
+        assert(pad_profile_load(&loaded, (const uint8_t *)&old, size));
+        assert(!outputs_at(&loaded, 7) && !outputs_at(&loaded, 23));
+        for (unsigned h = 0; h < HAND_COUNT; ++h) {
+            assert(loaded.trigger_source[h] == TRIGGER_PHYSICAL_TRAVEL);
+            assert(loaded.travel[h][0].channel == 2);
+        }
+        assert(loaded.travel[0][0].release == 180 && loaded.travel[0][0].engage == 90);
+        assert(loaded.travel[1][0].release == 64 && loaded.travel[1][0].engage == 128);
+        assert(loaded.touch[0][2].action == UNBOUND && loaded.touch[1][5].action == UNBOUND);
+        assert(!memcmp(&loaded.touch[1][5], &old.touch[1][5], offsetof(touch_binding, action)));
+        assert(loaded.touch[1][8].action == PAD_B && outputs_at(&loaded, 4) == bit_for(PAD_RT));
+        assert(outputs_at(&loaded, CLICK_SOURCES) == (bit_for(PAD_X) | bit_for(PAD_LT)));
+        assert(outputs_at(&loaded, CLICK_SOURCES + TRAVEL_SLOTS) == bit_for(PAD_RT));
+    }
+
+    // A saved byte-7 binding with its own custom action remains usable after upgrading.
+    old.version = 7;
+    old.trigger_source[0] = TRIGGER_PHYSICAL_TRAVEL;
+    old.travel[0][0] = (press_binding){2, 128, 48};
+    old.touch[0][2].action = UNBOUND;
+    bind_outputs(&old, 7, 0);
+    bind_outputs(&old, 23, 0);
+    assert(pad_profile_load(&loaded, (const uint8_t *)&old, sizeof(old)));
+    assert(outputs_at(&loaded, CLICK_SOURCES) == bit_for(PAD_X));
+    pad_profile saved = loaded;
+    assert(pad_profile_load(&loaded, (const uint8_t *)&loaded, sizeof(loaded)));
+    assert(!memcmp(&saved, &loaded, sizeof(saved)));
+
+    // Current profiles saved to the board must not reintroduce a contact route.
+    for (unsigned h = 0; h < HAND_COUNT; ++h) {
+        pad_profile edited = saved;
+        const unsigned slot = h == LEFT_HAND ? 2 : 5;
+        edited.touch[h][slot].action = PAD_B;
+        assert(!pad_profile_valid(&edited));
+        edited = saved;
+        bind_outputs(&edited, 16 * h + 7, bit_for(PAD_A));
+        assert(!pad_profile_valid(&edited));
+        edited = saved;
+        edited.trigger_source[h] = 1 + h * TOUCH_SLOTS + slot;
+        assert(!pad_profile_valid(&edited));
+        edited = saved;
+        edited.travel[h][0].channel = 1;
+        assert(!pad_profile_valid(&edited));
+    }
+}
+
 static void test_stick_settings(void)
 {
     pad_profile p;
@@ -171,10 +219,12 @@ static void test_stick_settings(void)
     memcpy(p.names[59], "Right rear", 11);
     bind_outputs(&p, 17, bit_for(PAD_X) | bit_for(PAD_Y));
     p.version = 5;
+    p.trigger_source[0] = p.trigger_source[1] = 0;
     uint8_t original[V5_PROFILE_BYTES];
     memcpy(original, &p, sizeof(original));
     memset(p.sticks, 255, sizeof(p.sticks));
     assert(pad_profile_load(&p, (const uint8_t *)&p, sizeof(original)));
+    memcpy(original + offsetof(pad_profile, trigger_source), p.trigger_source, sizeof(p.trigger_source));
     assert(!memcmp((const uint8_t *)&p + 1, original + 1, sizeof(original) - 1));
     assert(!memcmp(p.sticks, (uint8_t[]){2, 0, 100, 2, 0, 100}, sizeof(p.sticks)));
     original[1] = 4;
@@ -214,7 +264,7 @@ static void test_many_to_many(void)
     pad_defaults(&p);
     bind_outputs(&p, 4, bit_for(PAD_A) | bit_for(PAD_RT));
     bind_outputs(&p, 16 + 4, bit_for(PAD_A) | bit_for(PAD_R_GRAB_FULL));
-    p.travel[0][0] = (press_binding){1, 30, 80};
+    p.travel[0][0] = (press_binding){2, 30, 80};
     bind_outputs(&p, 32, bit_for(PAD_B) | bit_for(PAD_RT));
     assert(pad_profile_valid(&p));
     hand_state hands[HAND_COUNT] = {0};
@@ -222,7 +272,7 @@ static void test_many_to_many(void)
     hands[1].buttons = 1U << 4;
     pad_report r = pad_compose(hands, &p);
     const unsigned rt = 1U << 12, full = 1U << 17;
-    assert(pad_usb_buttons(&r) == (1U | rt | full) && r.trigger_level[1] == 255);
+    assert(pad_usb_buttons(&r) == (1U | rt | full) && !r.trigger_level[1]);
     hands[0].buttons = 0;
     r = pad_compose(hands, &p);
     assert(pad_usb_buttons(&r) == (1U | full) && r.trigger_level[1] == 0);
@@ -232,28 +282,28 @@ static void test_many_to_many(void)
     hands[0].buttons = 1U << 4;
     hands[1].buttons = 0;
     hands[0].seen = 2;
-    hands[0].raw[14] = 80;
+    hands[0].raw[15] = 80;
     pad_update_travel(&hands[0], p.travel[0]);
     r = pad_compose(hands, &p);
     assert(pad_usb_buttons(&r) == (1U | 2U | rt));
     hands[0].buttons = 0;
-    hands[0].raw[14] = 31;
+    hands[0].raw[15] = 31;
     pad_update_travel(&hands[0], p.travel[0]);
     r = pad_compose(hands, &p);
-    assert(pad_usb_buttons(&r) == (2U | rt) && r.trigger_level[1] == 255);
-    hands[0].raw[14] = 30;
+    assert(pad_usb_buttons(&r) == (2U | rt) && !r.trigger_level[1]);
+    hands[0].raw[15] = 30;
     pad_update_travel(&hands[0], p.travel[0]);
     r = pad_compose(hands, &p);
     assert(!pad_usb_buttons(&r) && !r.trigger_level[1]);
-    hands[0].raw[14] = 79;
+    hands[0].raw[15] = 79;
     pad_update_travel(&hands[0], p.travel[0]);
     assert(!hands[0].pressed_travel);
 
-    p.travel[0][0] = (press_binding){1, 190, 110};
+    p.travel[0][0] = (press_binding){2, 190, 110};
     const uint8_t positions[] = {200, 111, 110, 150, 189, 190};
     const uint8_t pressed[] = {0, 0, 1, 1, 1, 0};
     for (size_t i = 0; i < sizeof(positions); ++i) {
-        hands[0].raw[14] = positions[i];
+        hands[0].raw[15] = positions[i];
         pad_update_travel(&hands[0], p.travel[0]);
         assert(hands[0].pressed_travel == pressed[i]);
     }
@@ -291,9 +341,10 @@ static void test_names(void)
 
 int main(void)
 {
-    test_touch_triggers();
+    test_trigger_input_isolation();
     test_legacy_profile_upgrade();
     test_stick_settings();
+    test_trigger_contact_upgrade();
     test_many_to_many();
     test_names();
     pad_profile profile;
@@ -382,15 +433,15 @@ int main(void)
     pad_defaults(&p);
     assert(outputs_at(&p, 9) == bit_for(PAD_SELECT) && outputs_at(&p, 8) == bit_for(PAD_START));
     assert(outputs_at(&p, 16 + 9) == bit_for(PAD_HOME) && outputs_at(&p, 16 + 2) == bit_for(PAD_X));
-    assert(outputs_at(&p, 7) == bit_for(PAD_LT) && outputs_at(&p, 16 + 7) == bit_for(PAD_RT));
+    assert(!outputs_at(&p, 7) && !outputs_at(&p, 16 + 7));
     assert(outputs_at(&p, 16 + 8) == bit_for(PAD_R_STEAM));
     const uint8_t trigger_press[] = {0x14, 8, 0x80, 0, 0, 0, 0, 0, 0, 0};
     const uint8_t trigger_and_steam[] = {0x14, 8, 0x80, 1, 0, 0, 0, 0, 0, 0};
     assert(pad_decode(&hands[0], trigger_press, sizeof(trigger_press)));
     assert(pad_decode(&hands[1], trigger_and_steam, sizeof(trigger_and_steam)));
     r = pad_compose(hands, &p);
-    assert(pad_usb_buttons(&r) == ((1U << 11) | (1U << 12) | (1U << 15)));
-    assert(r.trigger_level[0] == 255 && r.trigger_level[1] == 255);
+    assert(pad_usb_buttons(&r) == (1U << 15));
+    assert(!r.trigger_level[0] && !r.trigger_level[1]);
     uint8_t legacy[35] = {1, 3};
     legacy[2 + 5] = PAD_X;
     legacy[34] = PAD_UP;
@@ -405,7 +456,7 @@ int main(void)
     memset(hands, 0, sizeof(hands));
     memset(touch + 2, 255, CONTACT_BYTES);
     for (unsigned h = 0; h < HAND_COUNT; ++h) {
-        assert(p.trigger_source[h] == 0);
+        assert(p.trigger_source[h] == TRIGGER_PHYSICAL_TRAVEL);
         for (unsigned i = 0; i < TOUCH_SLOTS; ++i) {
             assert(p.touch[h][i].channel == NO_CHANNEL);
             assert(p.touch[h][i].action == UNBOUND);
@@ -433,34 +484,33 @@ int main(void)
         bind_outputs(&p, 16 + 15, bit_for(a)); hands[1].buttons=0x8000;
         r=pad_compose(hands,&p);
         assert(pad_usb_buttons(&r)==(1U<<(a-PAD_LT+11)) && r.bytes[2]==8);
-        assert(r.trigger_level[0] == (a == PAD_LT ? 255 : 0));
-        assert(r.trigger_level[1] == (a == PAD_RT ? 255 : 0));
+        assert(!r.trigger_level[0] && !r.trigger_level[1]);
         hands[1].buttons=0;
         r=pad_compose(hands,&p);
         assert(!pad_usb_buttons(&r));
     }
     pad_defaults(&p);
-    p.travel[0][0]=(press_binding){1,70,100};
-    p.travel[1][1]=(press_binding){2,190,160};
-    p.travel[1][2]=(press_binding){2,140,110};
+    p.travel[0][0]=(press_binding){2,70,100};
+    p.travel[1][1]=(press_binding){1,190,160};
+    p.travel[1][2]=(press_binding){1,140,110};
     bind_outputs(&p, 32, bit_for(PAD_LT));
     bind_outputs(&p, 32 + 4, bit_for(PAD_R_GRAB));
     bind_outputs(&p, 32 + 5, bit_for(PAD_R_GRAB_FULL));
     memset(hands,0,sizeof(hands));
     pad_update_travel(&hands[1],p.travel[1]); assert(!hands[1].pressed_travel);
     uint8_t movement[10]={0x14,8};
-    movement[8]=100; movement[9]=155;
+    movement[8]=155; movement[9]=100;
     for(unsigned h=0;h<2;h++){
         assert(pad_decode(&hands[h],movement,sizeof(movement)));
         pad_update_travel(&hands[h],p.travel[h]);
     }
     r=pad_compose(hands,&p);
     assert(pad_usb_buttons(&r)==((1U<<11)|(1U<<14)));
-    movement[9]=100;
+    movement[8]=100;
     assert(pad_decode(&hands[1],movement,sizeof(movement)));
     pad_update_travel(&hands[1],p.travel[1]);
     r=pad_compose(hands,&p); assert(pad_usb_buttons(&r)&(1U<<17));
-    movement[9]=195;
+    movement[8]=195;
     assert(pad_decode(&hands[1],movement,sizeof(movement)));
     pad_update_travel(&hands[1],p.travel[1]); assert(!hands[1].pressed_travel);
 
@@ -475,7 +525,7 @@ int main(void)
     memcpy(old+(14+7)*5,(uint8_t[]){7,0,32,224,PAD_HOME},5);
     memcpy(old+(14+8)*5,(uint8_t[]){7,0,64,192,PAD_SELECT},5); // conflicting field
     assert(pad_profile_load(&p,v2,sizeof(v2)));
-    assert(outputs_at(&p, 7) == bit_for(PAD_HOME) && p.stick_flags == 1);
+    assert(!outputs_at(&p, 7) && p.stick_flags == 1);
     assert(p.touch[0][0].channel==NO_CHANNEL && !p.touch[0][0].action);
     assert(!memcmp(&p.touch[0][7],old+12*5,sizeof(touch_binding)));
     assert(p.touch[0][5].channel==NO_CHANNEL && !p.touch[0][5].action);

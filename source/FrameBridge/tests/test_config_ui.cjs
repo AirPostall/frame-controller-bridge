@@ -75,7 +75,7 @@ function fixtureDocument() {
 
 async function testUI(document, EventType = Event) {
   const profile = new Uint8Array(1734);
-  profile[0] = 6;
+  profile[0] = 7;
   profile.set([2,0,100,2,0,100],1728);
   for (let offset = 34; offset < 154; offset += 5) profile[offset] = 255;
   function readMask(bytes, source) {
@@ -85,13 +85,17 @@ async function testUI(document, EventType = Event) {
   function outputs(...actions) {
     return actions.reduce((bits, action) => bits | 1 << (action - 1), 0);
   }
-  for (const [source, action] of [[5,5],[6,5],[7,16],[16,1],[23,17],[24,20],[33,18]]) {
+  for (const [source, action] of [[5,5],[6,5],[16,1],[24,20],[32,16],[33,18]]) {
     const mask = outputs(action);
     profile.set([mask & 255, (mask >> 8) & 255, mask >> 16], 174 + source * 3);
   }
+  profile.set([2,64,128], 154);          // Left trigger click assigned to its own travel.
   profile.set([2,30,70], 157);           // Left grab on press travel byte 7.
-  profile.set([10,0,20,120,2], 94);      // Right A touch assigned to B and L2.
-  profile[172] = 13;
+  profile.set([2,64,128], 163);          // Right analog trigger has no digital click binding.
+  profile.set([5,0,20,120,0], 44);       // Calibrated trigger contact on each hand.
+  profile.set([3,0,20,120,0], 119);
+  profile.set([10,0,20,120,2], 94);      // Right A touch assigned to B.
+  profile[172] = profile[173] = 25;
   let boardProfile = profile.slice(), online = true;
   const writes = [], raw = [Buffer.alloc(18), Buffer.alloc(18)];
   raw[1][5] = 81;
@@ -99,7 +103,7 @@ async function testUI(document, EventType = Event) {
   const state = {
     up:[1,1], epoch:[1,1], seen:[3,3], masks:[32,1], travel:[2,0], active:[0,0],
     packets:[50,60], axes:[[0,0],[0,0]], usb:1, bluetoothMode:0, bluetooth:0, usbLayout:2, standardUsb:0,
-    buttons:1 | 1<<4 | 1<<13, triggers:[128,0], hat:8, bad:0, overflows:0,
+    buttons:1 | 1<<4 | 1<<13, triggers:[0,0], hat:8, bad:0, overflows:0,
   };
   const timers = new Map();
   let timerID = 0;
@@ -227,7 +231,8 @@ async function testUI(document, EventType = Event) {
   assert.equal(live('left','click',5).state, 'pressed');
   assert.equal(live('left','click',6).state, 'released');
   assert.deepEqual(live('left','travel',1), {output:'PL', state:'pressed', status:'Pressed'});
-  assert.deepEqual(live('right','analog',0), {output:'L2 level', state:'active', status:'128 / 255'});
+  assert.deepEqual(live('left','physical',0), {output:'L2 level', state:'released', status:'0 / 255'});
+  assert.deepEqual(live('right','physical',1), {output:'R2 level', state:'released', status:'0 / 255'});
   assert.equal(live('right','touch',0).state, 'released');
   state.seen[0] = 1; state.up[1] = 0; await poll();
   assert.equal(live('left','travel',1).state, 'waiting');
@@ -277,8 +282,8 @@ async function testUI(document, EventType = Event) {
   assert.equal(tbody.children.length, 22);
   for (const row of tbody.children) assert.deepEqual([...row.children].map(c => c.tagName), ['TH','TD','TD']);
   assert.equal(content('action-5'), 'L1');
-  assert.match(content('binding-16'), /L2/);
-  assert.match(content('binding-17'), /R2/);
+  assert.match(content('binding-16'), /Left trigger travel/i);
+  assert.equal(content('bit-16'), 'Left travel · 0x14 byte 7');
   assert.match(content('binding-20'), /Right Steam/i);
   assert.deepEqual([...el('binding-5').children].map(n => n.textContent), ['Left bumper', 'Left stick click']);
   assert.deepEqual([...el('bit-5').children].map(n => n.textContent), ['Left bit 5', 'Left bit 6']);
@@ -292,20 +297,20 @@ async function testUI(document, EventType = Event) {
   learn(16); rowFeedback(16, /capture.*travel/i);
   assert.ok(![...el('action-2').parentElement.children].includes(el('binding-feedback')));
   assert.ok(!el('pull-tools').hidden && !el('pull-capture').hidden);
-  click('pull-capture'); rowFeedback(16, /no clear press travel/i);
-  // Explicit travel calibration must ignore the simultaneous physical L2 click.
+  click('pull-capture'); rowFeedback(16, /no clear travel in byte 7/i);
+  // Touch and byte 6 can both change without a pull. Neither can be learned as trigger travel.
   click('calibrate-travel-16');
   state.masks[0] |= 1 << 7;
-  raw[0][14] = 140; raw[0][15] = 105; await poll();
-  click('pull-capture'); rowFeedback(16, /two.*fields|choose.*field/i);
-  assert.ok(!el('pull-channel').hidden && !el('pull-confirm').hidden);
-  el('pull-channel').value = '1';
+  raw[0][14] = 140; await poll();
+  click('pull-capture'); rowFeedback(16, /no clear travel in byte 7/i);
+  raw[0][15] = 105; await poll();
+  click('pull-capture'); rowFeedback(16, /release/i);
+  assert.ok(el('pull-channel').hidden && !el('pull-confirm').hidden);
   click('pull-confirm'); rowFeedback(16, /release/i);
   raw[0][14] = raw[0][15] = 0; await poll();
   click('pull-confirm'); rowFeedback(16, /travel learned/i);
   assert.ok(el('cancel').hidden && el('pull-tools').hidden);
-  assert.match(content('bit-16'), /Left bit 7/);
-  assert.match(content('bit-16'), /Left travel · 0x14 byte 7/);
+  assert.equal(content('bit-16'), 'Left travel · 0x14 byte 7');
 
   learn(2); click('cancel'); rowFeedback(2, /cancel/i);
   assert.ok(el('cancel').hidden);
@@ -313,7 +318,7 @@ async function testUI(document, EventType = Event) {
   assert.ok(el('cancel').hidden && el('pull-tools').hidden);
   assert.equal(content('bit-16'), '—');
   state.masks[1] = 0; await poll();
-  learn(21); state.masks[1] = 1; await poll();
+  learn(21); state.masks[1] = (1 << 7) | 1; await poll();
   rowFeedback(21, /Right bit 0.*L4/);
   assert.deepEqual(['action-21','binding-21','bit-21'].map(content), ['L4','Right A','Right bit 0']);
   assert.equal(content('binding-1'), 'Right A', 'A second output must preserve the first');
@@ -341,23 +346,24 @@ async function testUI(document, EventType = Event) {
   tab('map-tab','mapping'); noRowPrompt();
   assert.equal(content('bit-2'), '—', 'Leaving the tab must cancel a pending Learn');
 
-  change('trigger-right-channel',2);
   change('trigger-right-engage',45);
   change('trigger-right-release',150);
   click('trigger-right-apply');
-  assert.match(content('bit-17'), /Right bit 7/);
-  assert.match(content('bit-17'), /Right travel · 0x14 byte 7/);
+  assert.equal(content('bit-17'), '—', 'Applying thresholds preserves the existing click assignment');
   change('trigger-right-engage',150);
   click('trigger-right-apply');
   assert.match(content('trigger-right-note'), /differ|distinct|equal|separat/i);
   change('trigger-right-engage',45);
   assert.ok(el('trigger-right-apply').disabled, 'Rejected thresholds must leave the staged values intact');
-  change('binding-source',23);
-  check('source-output-4',true);
-  click('trigger-right-exclusive');
-  assert.doesNotMatch(content('bit-17'), /Right bit 7/);
-  assert.match(content('bit-17'), /Right travel · 0x14 byte 7/);
-  assert.match(content('bit-4'), /Right bit 7/);
+  for (const source of [7,23]) {
+    change('binding-source',source);
+    for (let action = 1; action <= 22; action++) {
+      const box = el('source-output-' + action);
+      assert.ok(box.disabled && !box.checked, 'Trigger contact stays unbound in the source editor');
+    }
+  }
+  click('trigger-right-bind');
+  assert.equal(content('bit-17'), 'Right travel · 0x14 byte 7');
 
   tab('sensors-tab','sensors');
   assert.equal(el('touch-left-list').children.length, 9);
@@ -365,12 +371,20 @@ async function testUI(document, EventType = Event) {
   assert.match(content('surface-1-7-signal'), /0x19 byte 5.*uncalibrated/i);
   click('surface-1-0'); assert.equal(document.activeElement, el('sensor-heading'));
   assert.equal(content('sensor-heading'), 'Right hand · A');
-  assert.match(content('surface-1-0-output'), /B.*L2 \(analog\)/);
-  raw[1][10] = 170; state.active[1] = 1; state.triggers[0] = 255; await poll();
+  assert.equal(content('surface-1-0-output'), 'Output · B');
+  raw[1][10] = 170; state.active[1] = 1; await poll();
   assert.equal(el('surface-1-0').dataset.state, 'touched');
   change('engage',140); assert.match(content('surface-1-0-signal'), /engage 140/);
   change('release',145); assert.equal(el('release').value, '20');
   click('surface-back'); assert.equal(document.activeElement, el('surface-1-0'));
+
+  for (const [side, slot] of [[0,2], [1,5]]) {
+    click('surface-' + side + '-' + slot);
+    assert.ok(el('sensor-action').disabled, 'Trigger contact stays unbound when calibrated');
+    assert.equal(el('sensor-action').value, '0');
+    assert.equal(content('surface-' + side + '-' + slot + '-output'), 'No output assigned');
+    click('surface-back');
+  }
 
   click('surface-0-8'); assert.equal(el('surface-0-8').dataset.state, 'unlearned');
   click('sensor-learn');
@@ -392,7 +406,7 @@ async function testUI(document, EventType = Event) {
   assert.equal(content('output-hosts'), 'Waiting for board');
   assert.equal(el('surface-0-8').dataset.state, 'offline');
   assert.equal(el('save').disabled, true);
-  tab('live-tab','live'); assert.equal(live('right','analog',0).state, 'offline');
+  tab('live-tab','live'); assert.equal(live('left','physical',0).state, 'offline');
   online = true; await poll();
   tab('map-tab','mapping'); assert.equal(content('bit-21'), 'Right bit 0');
   learn(2); rowFeedback(2, /hold.*B/i);
@@ -409,7 +423,10 @@ async function testUI(document, EventType = Event) {
   assert.equal(boardProfile[154], 2, 'Removing a route preserves its travel calibration');
   assert.deepEqual([...boardProfile.slice(163,166)], [2,150,45]);
   assert.equal(readMask(boardProfile,35), outputs(17));
-  assert.equal(readMask(boardProfile,23), outputs(4));
+  assert.deepEqual([...boardProfile.slice(172,174)], [25,25]);
+  assert.equal(readMask(boardProfile,23), 0);
+  assert.equal(boardProfile[48], 0);
+  assert.equal(boardProfile[123], 0);
   assert.equal(boardProfile[97], 140);
   assert.deepEqual([boardProfile[74], boardProfile[78]], [8,17]);
   assert.equal(content('dirty'), 'On board');
@@ -420,6 +437,7 @@ async function testUI(document, EventType = Event) {
   assert.match(liveRow('right','click',0).children[0].textContent, /Jump paddle/);
   assert.equal(live('right','click',1).output, 'Y');
   assert.equal(live('left','touch',8).output, 'R2');
+  assert.match(liveRow('right','physical',1).children[0].textContent, /Right trigger travel · byte 7/);
   tab('joysticks-tab','joysticks');
   assert.equal(el('stick-left').checked,true);
   assert.equal(el('stick-left-invert-x').checked,true);
@@ -432,27 +450,30 @@ async function testUI(document, EventType = Event) {
   state.usbLayout = 1;
   raw[1][14] = 62; raw[1][15] = 141; await poll();
   assert.ok(!el('trigger-settings').hidden, 'Trigger travel must also be configurable in Standard USB mode');
-  assert.match(content('trigger-right-levels'), /Byte 6.*62.*Byte 7.*141/);
-  assert.ok(!el('analog-routing').hidden, 'Bluetooth supports analog triggers with Standard USB selected');
+  assert.match(content('trigger-right-levels'), /0x14 byte 7.*141/i);
   assert.ok(el('trigger-levels').hidden, 'Standard USB has no analog trigger report');
   state.bluetoothMode = 1; state.bluetooth = 4; await poll();
   tab('live-tab','live');
   assert.equal(content('output-hosts'), 'Bluetooth ready');
   assert.match(content('trigger-levels'), /Left trigger/);
-  assert.equal(live('right','analog',0).output, 'L2 level');
+  assert.equal(live('left','physical',0).output, 'L2 level');
+  assert.equal(live('right','physical',1).status, '114 / 255', 'Falling physical travel ignores the click thresholds');
+  // Both touch contacts stay active throughout the independent trigger sweeps.
+  state.masks[0] |= 1 << 7; state.masks[1] |= 1 << 7;
+  state.active[0] |= 1 << 2; state.active[1] |= 1 << 5;
+  for (let sample = 0; sample <= 255; sample++) {
+    raw[0][15] = sample;
+    raw[1][15] = (sample + 73) & 255;
+    await poll();
+    assert.equal(live('left','physical',0).status, sample + ' / 255');
+    assert.equal(live('right','physical',1).status, (255 - raw[1][15]) + ' / 255');
+  }
   tab('map-tab','mapping');
-  change('rt-source',13);
-  assert.equal(el('rt-source').value, '13');
   change('binding-source',16);
   assert.equal(el('source-name').value, 'Jump paddle');
   assert.ok(el('source-output-1').checked && el('source-output-21').checked);
   state.up[1] = 0; await poll();
   assert.match(content('trigger-right-levels'), /offline/i);
-  change('trigger-right-channel',0); click('trigger-right-apply');
-  click('save'); await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual([...boardProfile.slice(163,166)], [0,0,0]);
-  assert.equal(readMask(boardProfile,35), outputs(17), 'Turning travel off preserves its output for recalibration');
-  assert.equal(readMask(boardProfile,23), outputs(4));
 }
 
 module.exports = {html, testUI};

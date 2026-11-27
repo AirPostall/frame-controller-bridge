@@ -3,13 +3,16 @@
 const BindingBackup = (() => {
   const format = 'framebridge-bindings';
   const triggerOffset = 172, maskOffset = 174, nameOffset = 288, nameBytes = 24;
+  const physicalTravel = 25; // V7 wire value for the hand's physical trigger.
+  const triggerTouchSlots = [2, 5];
   const sourceCount = 38, actionCount = 22, nameCount = sourceCount + actionCount;
   const allOutputs = (1 << actionCount) - 1;
   const handNames = ['left', 'right'];
   const legacyTravel = [16, 18, 21, 17, 19, 22];
   const stickOffset = 1728, stickBytes = 3;
   const defaultStick = {invertX:false, invertY:true, deadzone:0, sensitivity:100};
-  const profileSizes = [172, 174, stickOffset, stickOffset + 2 * stickBytes];
+  const stickProfileSize = stickOffset + 2 * stickBytes;
+  const profileSizes = [172, 174, stickOffset, stickProfileSize, stickProfileSize];
   const size = version => Number.isInteger(version) ? (profileSizes[version - 3] || 0) : 0;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder('utf-8', {fatal:true, ignoreBOM:true});
@@ -18,7 +21,8 @@ const BindingBackup = (() => {
     return Number.isInteger(value) && value >= 0 && value <= max;
   }
   function stickStart(profile, side) {
-    if (profile[0] !== 6 || profile.length !== size(6)) throw Error('Joystick tuning requires a V6 profile.');
+    if ((profile[0] !== 6 && profile[0] !== 7) || profile.length !== size(profile[0]))
+      throw Error('Joystick tuning requires a V6 or V7 profile.');
     if (!bounded(side, 1)) throw Error('Invalid joystick side.');
     return stickOffset + side * stickBytes;
   }
@@ -57,7 +61,7 @@ const BindingBackup = (() => {
   }
   function setMask(profile, source, value) {
     checkSource(source);
-    if ((profile[0] !== 5 && profile[0] !== 6) || !bounded(value, allOutputs)) throw Error('Invalid button output mask.');
+    if (profile[0] < 5 || !size(profile[0]) || !bounded(value, allOutputs)) throw Error('Invalid button output mask.');
     const offset = maskOffset + 3 * source;
     profile.set([value & 255, (value >>> 8) & 255, value >>> 16], offset);
   }
@@ -83,7 +87,7 @@ const BindingBackup = (() => {
   }
   function setName(profile, index, value) {
     const start = nameStart(index);
-    if (profile[0] !== 5 && profile[0] !== 6) throw Error('Button names require a V5 or V6 profile.');
+    if (profile[0] < 5 || !size(profile[0])) throw Error('Button names require profile version 5 or later.');
     checkName(value);
     const bytes = encoder.encode(value);
     if (bytes.length >= nameBytes) throw Error('Button names can use up to 23 UTF-8 bytes.');
@@ -145,6 +149,7 @@ const BindingBackup = (() => {
         if (channel > 2 || (channel && release === engage)) throw Error('Invalid press travel calibration.');
       }
       const source = version >= 4 ? profile[triggerOffset + side] : 0;
+      if (version === 7 && source === physicalTravel) continue;
       if (source && (source > 24 || profile[34 + (source - 1) * 5] === 255))
         throw Error('The analog trigger source needs a touch calibration.');
     }
@@ -163,15 +168,17 @@ const BindingBackup = (() => {
         travel: Array.from({length:3}, (_, slot) => slice(154 + (side * 3 + slot) * 3, 3)),
       };
       if (version >= 4) {
-        const index = profile[triggerOffset + side] - 1;
-        settings.analogTriggerSource = index < 0 ? null : {hand:handNames[Math.floor(index / 12)], slot:index % 12};
+        const source = profile[triggerOffset + side];
+        const index = source - 1;
+        if (source === physicalTravel) settings.analogTriggerSource = 'travel';
+        else settings.analogTriggerSource = source ? {hand:handNames[Math.floor(index / 12)], slot:index % 12} : null;
       }
       if (version >= 5) {
         settings.travelOutputs = Array.from({length:3}, (_, i) => actionList(profile, 32 + side * 3 + i));
         settings.buttonNames = Array.from({length:16}, (_, i) => name(profile, side * 16 + i));
         settings.travelNames = Array.from({length:3}, (_, i) => name(profile, 32 + side * 3 + i));
       }
-      if (version === 6) settings.stick = stick(profile, side);
+      if (version >= 6) settings.stick = stick(profile, side);
       return settings;
     }
     const result = {format, version:1, profileVersion:version, left:hand(0), right:hand(1)};
@@ -179,9 +186,29 @@ const BindingBackup = (() => {
     return result;
   }
 
-  function decode(data, targetVersion = 6) {
+  function usePhysicalTriggers(profile, version) {
+    for (let side = 0; side < 2; ++side) {
+      profile[triggerOffset + side] = physicalTravel;
+      setMask(profile, 16 * side + 7, 0);
+      for (let slot = 0; slot < 12; ++slot) {
+        const offset = 34 + 5 * (side * 12 + slot) + 4;
+        const action = profile[offset];
+        if (slot === triggerTouchSlots[side] || (version < 7 && (action === 16 || action === 17)))
+          profile[offset] = 0;
+      }
+      const offset = 154 + side * 9;
+      if (profile[offset] !== 2) {
+        if (!profile[offset]) profile.set([64, 128], offset + 1);
+        profile[offset] = 2;
+        const source = 32 + side * 3;
+        setMask(profile, source, mask(profile, source) | (1 << (15 + side)));
+      }
+    }
+  }
+
+  function decode(data, targetVersion = 7) {
     if (data?.format !== format || data.version !== 1 || !size(data.profileVersion) || !size(targetVersion))
-      throw Error('Choose a Frame Bridge bindings backup (profile versions 3–6).');
+      throw Error('Choose a Frame Bridge bindings backup (profile versions 3–7).');
     const version = data.profileVersion;
     if (version > targetVersion) throw Error('This backup requires V' + version + ' firmware.');
     const result = new Uint8Array(size(targetVersion));
@@ -189,10 +216,12 @@ const BindingBackup = (() => {
     [data.left, data.right].forEach((hand, side) => {
       if (typeof hand?.stickEnabled !== 'boolean') throw Error('Missing stick setting.');
       if (hand.stickEnabled) result[1] |= 1 << side;
-      if (targetVersion === 6) setStick(result, side, version === 6 ? hand.stick : defaultStick);
+      if (targetVersion >= 6) setStick(result, side, version >= 6 ? hand.stick : defaultStick);
       array(hand.touch, 12).forEach((row, i) => result.set(bytes(row, 5), 34 + (side * 12 + i) * 5));
       array(hand.travel, 3).forEach((row, i) => result.set(bytes(row, 3), 154 + (side * 3 + i) * 3));
-      if (version >= 4 && hand.analogTriggerSource !== null) {
+      if (version === 7 && hand.analogTriggerSource === 'travel') {
+        result[triggerOffset + side] = physicalTravel;
+      } else if (version >= 4 && hand.analogTriggerSource !== null) {
         const source = hand.analogTriggerSource;
         const sourceHand = handNames.indexOf(source?.hand);
         if (sourceHand < 0 || !bounded(source?.slot, sourceHand ? 11 : 8)) throw Error('Invalid analog trigger touch source.');
@@ -217,9 +246,10 @@ const BindingBackup = (() => {
     });
     if (version >= 5) array(data.outputNames, actionCount).forEach((v, i) => setName(result, sourceCount + i, v));
     validate(result);
+    if (targetVersion === 7) usePhysicalTriggers(result, version);
     return result;
   }
 
-  return {encode, decode, mask, setMask, name, setName, stick, setStick, size, triggerOffset};
+  return {encode, decode, mask, setMask, name, setName, stick, setStick, size, triggerOffset, physicalTravel, triggerTouchSlots};
 })();
 if (typeof module !== 'undefined') module.exports = BindingBackup;

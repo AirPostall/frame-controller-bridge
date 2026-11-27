@@ -13,8 +13,59 @@ static void check_packet(const pad_report *r, const uint8_t expected[PRO3_INPUT_
     assert(!memcmp(guarded + 1, expected, PRO3_INPUT_PAYLOAD_SIZE));
 }
 
+static void test_trigger_travel(void)
+{
+    pad_profile p;
+    pad_defaults(&p);
+    p.travel[1][0] = (press_binding){2, 191, 127};
+    hand_state hands[2] = {0};
+    uint8_t controls[PRO3_CONTROL_BYTES], wired[PRO3_INPUT_PAYLOAD_SIZE], generic[11];
+    uint8_t left[] = {0x14,8,0,0,0,0,0,0,0,0};
+    uint8_t right[] = {0x14,8,0,0,0,0,0,0,0,0};
+    bool left_pressed = false, right_pressed = false;
+    assert(pad_profile_valid(&p));
+    for (int pass = 0; pass <= 1; ++pass) {
+        for (int i = 0; i <= 255; ++i) {
+            unsigned left_raw = pass ? 255 - i : i;
+            unsigned right_raw = (left_raw + 71) % 256;
+            // Vary bit 7 and byte 6 separately from the travel byte on both hands.
+            left[2] = (i & 1) ? 0x80 : 0;
+            right[2] = (i & 2) ? 0x80 : 0;
+            left[8] = 255 - left_raw;
+            right[8] = 255 - right_raw;
+            left[9] = left_raw;
+            right[9] = right_raw;
+            assert(pad_decode(&hands[0], left, sizeof(left)));
+            assert(pad_decode(&hands[1], right, sizeof(right)));
+            for (unsigned h = 0; h < HAND_COUNT; ++h) pad_update_travel(&hands[h], p.travel[h]);
+            pad_report r = pad_compose(hands, &p);
+            assert(pro3_encode(&r, wired) == sizeof(wired));
+            assert(pro3_encode_controls(&r, controls) == sizeof(controls));
+            assert(!memcmp(wired, controls, sizeof(controls)));
+            assert(controls[6] == left_raw && controls[5] == 255 - right_raw);
+            assert(!!(controls[8] & 1) == (left_raw == 255));
+            assert(!!(controls[8] & 2) == (right_raw == 0));
+            pad_standard_report(&r, generic);
+            if (left_raw >= 128) left_pressed = true;
+            if (left_raw <= 64) left_pressed = false;
+            if (right_raw <= 127) right_pressed = true;
+            if (right_raw >= 191) right_pressed = false;
+            assert(!!(generic[8] & 8) == left_pressed);
+            assert(!!(generic[8] & 16) == right_pressed);
+        }
+    }
+    // Disconnect a hand with falling polarity. Unseen travel must also release.
+    hands[1] = (hand_state){0};
+    left[9] = 75;
+    assert(pad_decode(&hands[0], left, sizeof(left)));
+    pad_update_travel(&hands[0], p.travel[0]);
+    pad_report r = pad_compose(hands, &p);
+    assert(r.trigger_level[0] == 75 && !r.trigger_level[1]);
+}
+
 int main(void)
 {
+    test_trigger_travel();
     assert(PRO3_INPUT_ID == 4 && PRO3_INPUT_PAYLOAD_SIZE == 31);
     uint8_t expected[PRO3_INPUT_PAYLOAD_SIZE] = {8, 127, 127, 127, 127};
     hand_state hands[HAND_COUNT] = {
@@ -48,6 +99,8 @@ int main(void)
         r.bytes[0] = action;
         r.bytes[1] = action >> 8;
         r.bytes[11] = action >> 16;
+        expected[5] = r.trigger_level[1] = i == 12 ? 255 : 0;
+        expected[6] = r.trigger_level[0] = i == 11 ? 255 : 0;
         expected[7] = expected_buttons[i];
         expected[8] = expected_buttons[i] >> 8;
         expected[9] = expected_buttons[i] >> 16;
@@ -55,6 +108,7 @@ int main(void)
     }
 
     r.bytes[0] = r.bytes[1] = r.bytes[11] = 0xff;
+    expected[5] = expected[6] = r.trigger_level[0] = r.trigger_level[1] = 255;
     expected[7] = 0xff;
     expected[8] = 0x7f;  // No dedicated Capture button.
     expected[9] = 0x03;
@@ -74,6 +128,7 @@ int main(void)
     for (unsigned level = 0; level <= 255; ++level) {
         r.trigger_level[0] = level;
         r.trigger_level[1] = 255 - level;
+        expected[8] = 0x7c | (level == 0 ? 2 : level == 255 ? 1 : 0);
         expected[5] = 255 - level;
         expected[6] = level;
         check_packet(&r, expected);

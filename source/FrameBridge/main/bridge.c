@@ -193,6 +193,8 @@ void bridge_receive(unsigned h, const uint8_t *bytes, size_t size)
     uint32_t revision = status.hands[h].revision;
     uint8_t old_travel = status.hands[h].pressed_travel;
     uint16_t old_buttons = status.hands[h].buttons;
+    uint8_t old_trigger = status.hands[h].raw[TRIGGER_RAW];
+    bool had_press_report = status.hands[h].seen & 2;
     int16_t old_x = status.hands[h].x, old_y = status.hands[h].y;
     unsigned wake = 0;
     if (pad_decode(&status.hands[h], bytes, size)) {
@@ -205,7 +207,7 @@ void bridge_receive(unsigned h, const uint8_t *bytes, size_t size)
         const hand_state *v = &status.hands[h];
         if (v->buttons != old_buttons ||
             ((profile.stick_flags & (1U << h)) && (v->x != old_x || v->y != old_y)) ||
-            (fields_changed && (profile.trigger_source[0] || profile.trigger_source[1])) ||
+            v->raw[TRIGGER_RAW] != old_trigger || (!had_press_report && (v->seen & 2)) ||
             v->active != old_touch || v->pressed_travel != old_travel) {
             wake = update_locked();
         }
@@ -236,7 +238,7 @@ esp_err_t bridge_save(const pad_profile *p)
     nvs_handle_t nvs;
     esp_err_t err = nvs_open("framebridge", NVS_READWRITE, &nvs);
     if (err != ESP_OK) return err;
-    err = nvs_set_blob(nvs, "profile_v6", p, sizeof(*p));
+    err = nvs_set_blob(nvs, "profile_v7", p, sizeof(*p));
     if (err == ESP_OK) err = nvs_commit(nvs);
     nvs_close(nvs);
     if (err != ESP_OK) return err;
@@ -259,8 +261,14 @@ static bool read_profile(nvs_handle_t nvs)
     // Read large blobs into permanent storage before invoking the migration code.
     // NVS and migration never need large buffers on the main task's stack together.
     size_t size = sizeof(profile);
+    if (nvs_get_blob(nvs, "profile_v7", &profile, &size) == ESP_OK &&
+        size == sizeof(profile) && profile.version == PROFILE_VERSION &&
+        pad_profile_load(&profile, (const uint8_t *)&profile, size)) return true;
+
+    size = sizeof(profile);
     if (nvs_get_blob(nvs, "profile_v6", &profile, &size) == ESP_OK &&
-        size == sizeof(profile) && pad_profile_valid(&profile)) return true;
+        size == sizeof(profile) && profile.version == 6 &&
+        pad_profile_load(&profile, (const uint8_t *)&profile, size)) return true;
 
     size = V5_PROFILE_BYTES;
     if (nvs_get_blob(nvs, "profile_v5", &profile, &size) == ESP_OK &&

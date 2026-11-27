@@ -39,26 +39,21 @@
   <button id="cancel" hidden>Cancel learn</button>
 </div>
 <article id="trigger-settings" class="wide" hidden><h2>Trigger activation and release</h2>
-<p>Watch the two live bytes while squeezing each trigger. Select the byte that moves, then enter the level that should press the trigger and the level that should release it. For a byte that falls as you squeeze, use a lower activation value than release. Apply the values, then choose Save to board.</p>
+<p>Each trigger uses its own controller’s 0x14 byte 7 for the full 0–255 travel range. Trigger touch has no gamepad output. Set the thresholds for a digital press, then choose Apply values and Save to board. If the byte falls as you squeeze, set activation below release.</p>
 <div class="hands trigger-settings">
 <fieldset><legend>Left trigger (L2)</legend>
 <p id="trigger-left-levels">Waiting for controller</p>
-<label>Travel source <select id="trigger-left-channel"><option value="0">Off</option><option value="1">0x14 byte 6</option><option value="2">0x14 byte 7</option></select></label>
 <label>Activate at <input id="trigger-left-engage" type="number" min="0" max="255" step="1" disabled></label>
 <label>Release at <input id="trigger-left-release" type="number" min="0" max="255" step="1" disabled></label>
-<div class="actions"><button id="trigger-left-apply" disabled>Apply values</button><button id="trigger-left-exclusive" hidden>Use travel for L2</button></div>
+<div class="actions"><button id="trigger-left-apply" disabled>Apply values</button><button id="trigger-left-bind" hidden>Bind L2 click to travel</button></div>
 <p id="trigger-left-note" role="status"></p></fieldset>
 <fieldset><legend>Right trigger (R2)</legend>
 <p id="trigger-right-levels">Waiting for controller</p>
-<label>Travel source <select id="trigger-right-channel"><option value="0">Off</option><option value="1">0x14 byte 6</option><option value="2">0x14 byte 7</option></select></label>
 <label>Activate at <input id="trigger-right-engage" type="number" min="0" max="255" step="1" disabled></label>
 <label>Release at <input id="trigger-right-release" type="number" min="0" max="255" step="1" disabled></label>
-<div class="actions"><button id="trigger-right-apply" disabled>Apply values</button><button id="trigger-right-exclusive" hidden>Use travel for R2</button></div>
+<div class="actions"><button id="trigger-right-apply" disabled>Apply values</button><button id="trigger-right-bind" hidden>Bind R2 click to travel</button></div>
 <p id="trigger-right-note" role="status"></p></fieldset>
-</div><p>Bit 7 also reports a fixed click. Choose <strong>Use travel for L2</strong> or <strong>Use travel for R2</strong> to move that output from its bit 7 click to the adjustable travel source.</p></article>
-<article id="analog-routing" class="wide" hidden><h2>Analog trigger sources</h2>
-<p>Choose a calibrated touch surface to vary a trigger from 0 to 255 over Bluetooth or wired Pro 3 USB. In Touch, set Release at for zero output and Engage at for full output. A bound digital trigger press always gives full output.</p>
-<div class="choices"><label>Left trigger <select id="lt-source"></select></label><label>Right trigger <select id="rt-source"></select></label></div></article>
+</div></article>
 <article class="wide"><h2>Binding backups</h2><p>Export the bindings shown here, including unsaved edits. Imported settings take effect when you choose Save to board.</p>
 <div class="actions"><button id="export" disabled>Export JSON</button><button id="import" disabled>Import JSON</button><input id="backup-file" type="file" accept=".json,application/json" hidden></div></article>
 </section>

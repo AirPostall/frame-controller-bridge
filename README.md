@@ -58,7 +58,7 @@ To make a backup first, open the current setup page and choose **Bindings → Ex
 python -m esptool --chip esp32s3 --port PORT write-flash 0x10000 frame_bridge-paired.bin
 ```
 
-Firmware 5.3 loads existing bindings, touch calibrations, trigger sources and stick enable settings. Profiles and JSON backups from V3 through V5 gain the default joystick settings on import. The first save writes a V6 profile in a separate settings entry, so the previous firmware can still read its earlier profile.
+Firmware 5.3.2 updates saved profiles and V3–V7 JSON backups to use each hand’s `0x14` byte 7 for trigger travel. It clears output bindings from both trigger touch contacts and keeps their calibrations available on the **Touch** tab.
 
 After either procedure, wait for esptool to finish verifying the image. Tap RESET if the board stays in downloader mode. For wired gameplay connect the board’s **native USB/OTG data port** to the host. For wireless gameplay either USB connector can supply power on boards that support it. On boards with separate USB and UART connectors, the UART connector is for programming and serial access.
 
@@ -82,7 +82,7 @@ The board remembers the last paired wireless host across power cycles. After a r
 
 ## Bind clicks, grips and sticks
 
-A fresh profile maps the right face buttons to A/B/X/Y, the left D-pad to four directions, and each bumper and stick click to its matching side. Left View sends Select and left Steam sends Start. With the Pro 3 layout, both right Menu and right Steam send Home. Left and right bit 7 send L2 and R2. Grab presses start unbound. The **Bindings** table shows the Pro 3 output, the Steam Frame button assigned to it, and its actual left or right report bit. A learned travel input shows its report byte. Unknown buttons retain their hand and bit number.
+A fresh profile maps the right face buttons to A/B/X/Y, the left D-pad to four directions, and each bumper and stick click to its matching side. Left View sends Select and left Steam sends Start. With the Pro 3 layout, both right Menu and right Steam send Home. Left and right trigger travel drive L2 and R2 immediately. Grab presses start unbound. The **Bindings** table shows each output’s assigned inputs and their report bits or travel bytes.
 
 | Binding in setup | Gamepad output |
 | --- | --- |
@@ -95,7 +95,9 @@ Choose **Learn** beside an output, then press a physical button to add that inpu
 
 To edit from the other direction, open **Edit by Steam Frame button**, select a physical source, and check or uncheck its outputs. Unchecking one output removes that connection. **Clear** on an output row removes its button and travel connections. Rename a physical source or a gamepad output to show your own label in setup and Live inputs. Choose **Save to board** to apply mappings and names.
 
-For a trigger or grab, start travel calibration at rest, squeeze to the desired position, choose **Capture held travel**, release, and choose **Confirm release**. For a full grab click, start with the first stage already held. The trigger settings also let you select report byte 6 or 7 and set separate activation and release levels from 0 to 255 for each hand. Watch both live bytes while squeezing and releasing to identify the channel and direction. Choose **Apply values** after editing the thresholds. If the bit 7 click also drives that trigger, choose **Use travel for L2** or **Use travel for R2**, then **Save to board**.
+For L2 and R2, open **Bindings → Trigger activation and release** and slowly squeeze one trigger. Its live reading shows byte 7 of that hand’s `0x14` report. Wired Pro 3 and Bluetooth send the full 0–255 travel range. Standard and Extended USB use the digital trigger buttons. To adjust their thresholds, set **Activate at** above **Release at** if the byte rises during a squeeze, or below it if it falls. Choose **Apply values**, then **Save to board**. A falling calibration reverses the analog direction so a full squeeze still gives 255.
+
+To learn a trigger or grab press threshold, start at rest, squeeze to the desired position, choose **Capture held travel**, release, and choose **Confirm release**. For a full grab click, start with the first stage already held.
 
 ## Customize the joysticks
 
@@ -114,7 +116,8 @@ Every touch surface starts **uncalibrated** on a fresh profile. Learn each surfa
 1. Under **Touch**, both hands’ surfaces are listed with their calibration and output. Select a surface from either hand to open its editor, then choose **Learn touch**. Keep the controller steady and nearby fingers still. Touch lightly without clicking. For a grip sensor, lift and rest just the selected finger.
 2. Follow the five **Capture** prompts in order. Alternate between lifted, touching, lifted, touching and lifted. If several candidate signals move, preview one and move the target finger and adjacent fingers independently. Choose **Use this signal** once it follows the intended finger.
 3. Adjust **Engage at** and **Release at** for a continuous signal. A signal that rises on contact takes a higher engage level than release level. For a falling signal, reverse that order. Select an optional **Gamepad output** to hold a button or D-pad direction while touched. Choose **Save to board**, then confirm the result under **Live touches**.
-4. For an analog output, open **Bindings → Analog trigger sources** and select a calibrated surface for the left (L2) or right (R2) trigger. Its release level gives zero and its engage level gives full output (255). Widen the gap for a gentler response. Binary sensors give only the two endpoints. A learned digital trigger press still gives full output.
+
+The **Trigger** touch surface on each hand is available for calibration and monitoring. Its gamepad output stays unbound. Resting a finger on the trigger leaves L2 or R2 at its current travel value.
 
 For example, learn the right A surface and assign its contact to the **PR** output in the Pro 3 layout. A light touch should activate PR. Pressing through the click should add A. Watch both outputs in **Live inputs**, then try the gesture on the host.
 

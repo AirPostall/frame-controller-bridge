@@ -138,7 +138,7 @@ assert.equal(backup.name(v5, 0), '');
 const defaultStick = {invertX:false, invertY:true, deadzone:0, sensitivity:100};
 for (const data of [backup.encode(legacy), exported, v5data]) {
   const prior = backup.decode(data, 5);
-  const six = backup.decode(data);
+  const six = backup.decode(data, 6);
   assert.equal(six.length, 1734);
   assert.equal(six[0], 6);
   assert.deepEqual(six.subarray(1, 1728), prior.subarray(1));
@@ -146,7 +146,7 @@ for (const data of [backup.encode(legacy), exported, v5data]) {
   assert.deepEqual(backup.stick(six, 0), defaultStick);
   assert.deepEqual(backup.stick(six, 1), defaultStick);
 }
-const six = backup.decode(v5data);
+const six = backup.decode(v5data, 6);
 const left = {invertX:true, invertY:false, deadzone:50, sensitivity:25};
 const right = {invertX:true, invertY:true, deadzone:18, sensitivity:200};
 backup.setStick(six, 0, left);
@@ -173,4 +173,67 @@ for (const [index, value] of [[1728,4], [1729,51], [1730,24], [1733,201]]) {
 assert.throws(() => backup.stick(six, 2));
 assert.throws(() => backup.setStick(six, -1, left));
 assert.throws(() => backup.setStick(v5, 0, left));
-console.log('V3–V6 binding backups, joystick settings, mask migration, UTF-8 names and validation passed.');
+// A 5.3.1 board may already have saved a V7 backup with configurable trigger sources.
+const leftTriggerTouch = 34 + 5 * 2, rightTriggerTouch = 34 + 5 * (12 + 5);
+const lt = 1 << 15, rt = 1 << 16;
+assert.equal(backup.physicalTravel, 25);
+for (const version of [6, 7]) {
+  const prior = six.slice();
+  prior[0] = version;
+  prior.set([6,0,14,130,4], leftTriggerTouch);   // Continuous touch mapped to an ordinary button.
+  prior.set([7,3,14,130,16], rightTriggerTouch);
+  prior.set([18,3], 172);                       // Cross-hand analog touch routes.
+  backup.setMask(prior, 7, lt | rt | 1);
+  backup.setMask(prior, 23, rt | 2);
+  prior.set([1,180,90], 154);                   // Falling thresholds learned on byte 6.
+  prior.set([0,0,0], 163);                      // Disabled right trigger.
+  backup.setMask(prior, 32, 4);
+  prior[34 + 5 * 8 + 4] = 17;                   // Unrelated calibrated surface with a digital output.
+  const migrated = backup.decode(backup.encode(prior));
+  const expected = prior.slice();
+  expected[0] = 7;
+  expected.set([25,25], 172);
+  expected.set([2,180,90], 154);
+  expected.set([2,64,128], 163);
+  expected[leftTriggerTouch + 4] = expected[rightTriggerTouch + 4] = 0;
+  if (version < 7) expected[34 + 5 * 8 + 4] = 0;
+  backup.setMask(expected, 7, 0);
+  backup.setMask(expected, 23, 0);
+  backup.setMask(expected, 32, lt | 4);
+  backup.setMask(expected, 35, rt);
+  assert.deepEqual(migrated, expected);
+
+  // A later restore must preserve the user's byte-7 calibration and choice of digital outputs.
+  backup.setMask(migrated, 32, 4);
+  backup.setMask(migrated, 35, 0);
+  const stored = JSON.parse(JSON.stringify(backup.encode(migrated)));
+  assert.equal(stored.left.analogTriggerSource, 'travel');
+  assert.equal(stored.right.analogTriggerSource, 'travel');
+  assert.deepEqual(backup.decode(stored), migrated);
+  assert.throws(() => backup.decode(stored, 6), /V7 firmware/);
+  assert.throws(() => backup.decode({...stored, profileVersion:6}), /trigger/i);
+  const invalidSource = migrated.slice();
+  invalidSource[172] = 26;
+  assert.throws(() => backup.encode(invalidSource), /trigger/i);
+  invalidSource[0] = 6;
+  invalidSource[172] = 25;
+  assert.throws(() => backup.encode(invalidSource), /trigger/i);
+}
+
+for (const older of [legacy, profile, v5]) {
+  const data = backup.encode(older);
+  for (const [side, action] of [['left',16],['right',17]]) {
+    data[side].buttons[7] = data.profileVersion >= 5 ? [action] : action;
+    data[side].travel[0] = [0,0,0];
+    if (data.profileVersion >= 4) data[side].analogTriggerSource = null;
+  }
+  const upgraded = backup.decode(data);
+  assert.deepEqual([...upgraded.subarray(172,174)], [25,25]);
+  assert.deepEqual([...upgraded.subarray(154,157)], [2,64,128]);
+  assert.deepEqual([...upgraded.subarray(163,166)], [2,64,128]);
+  assert.equal(backup.mask(upgraded, 7), 0);
+  assert.equal(backup.mask(upgraded, 23), 0);
+  assert.equal(backup.mask(upgraded, 32), lt);
+  assert.equal(backup.mask(upgraded, 35), rt);
+}
+console.log('V3–V7 backup round trips, trigger and joystick settings, migrations and validation passed.');

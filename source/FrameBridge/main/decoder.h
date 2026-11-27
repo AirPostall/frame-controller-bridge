@@ -11,7 +11,9 @@ enum { CONTACT_BYTES = 14, RAW_CHANNELS = 18, TOUCH_SLOTS = 12, LEFT_TOUCH_SLOTS
        TRAVEL_SLOTS = 3, LEGACY_PROFILE_BYTES = 174, V3_PROFILE_BYTES = 172, V4_PROFILE_BYTES = 174,
        CLICK_SOURCES = HAND_COUNT * 16, PRESS_SOURCES = CLICK_SOURCES + HAND_COUNT * TRAVEL_SLOTS,
        NAME_SLOTS = PRESS_SOURCES + ACTION_COUNT - 1, NAME_BYTES = 24,
-       V5_PROFILE_BYTES = 1728, PROFILE_VERSION = 6 };
+       V5_PROFILE_BYTES = 1728, PROFILE_VERSION = 7,
+       TRIGGER_PHYSICAL_TRAVEL = HAND_COUNT * TOUCH_SLOTS + 1,
+       TRIGGER_TRAVEL_CHANNEL = 2, TRIGGER_RAW = CONTACT_BYTES + 1 };
 enum { WHOLE_BYTE, LOW_NIBBLE, HIGH_NIBBLE, BIT_ZERO, BIT_SEVEN = BIT_ZERO + 7 };
 
 typedef struct {
@@ -27,7 +29,8 @@ typedef struct {
     uint8_t channel, mode, release, engage, action;
 } touch_binding;
 
-// channel 0 disables travel. Channels 1 and 2 read press-report bytes 6 and 7.
+// Channels 1 and 2 read 0x14 bytes 6 and 7. The trigger uses channel 2;
+// grab stages can use either channel or 0 to disable them.
 typedef struct { uint8_t channel, release, engage; } press_binding;
 
 enum { STICK_INVERT_X = 1, STICK_INVERT_Y = 2 };
@@ -39,7 +42,7 @@ typedef struct {
     uint8_t reserved[CLICK_SOURCES]; // V1–V4 stored one action per click here.
     touch_binding touch[HAND_COUNT][TOUCH_SLOTS];
     press_binding travel[HAND_COUNT][TRAVEL_SLOTS];
-    // LT/RT each optionally read touch slot 1 + hand * TOUCH_SLOTS + slot; zero uses digital only.
+    // Kept at 25 for V7 wire compatibility. Earlier profiles could route touch to these axes.
     uint8_t trigger_source[2];
     // Clicks first, then travel; each group is hand-major. Bit (action - 1) enables an output.
     uint8_t outputs[PRESS_SOURCES][3];
