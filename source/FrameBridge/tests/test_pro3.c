@@ -63,8 +63,41 @@ static void test_trigger_travel(void)
     assert(r.trigger_level[0] == 75 && !r.trigger_level[1]);
 }
 
+static void test_motion_packet(void)
+{
+    pad_report report = {.bytes = {[2] = 8}, .trigger_level = {16, 32}, .motion_valid = true,
+        .gyro_gain = 100, .motion_tick_us = 0xff81a273U,
+        .motion = {.accel = {16384, -65536, 8388607}, .gyro = {-8388608, 65536, -4}}};
+    uint8_t expected[PRO3_INPUT_PAYLOAD_SIZE] = {8,127,127,127,127,32,16};
+    // Payload byte 14 is wire byte 15 after the report ID. Axes are little endian.
+    const uint8_t axes[] = {0x00,0x10, 0x00,0xc0, 0xff,0x7f,
+                            0x00,0x80, 0x00,0x40, 0xff,0xff};
+    memcpy(expected + 14, axes, sizeof(axes));
+    memcpy(expected + 26, (uint8_t[]){0x73,0xa2,0x81,0xff}, 4);
+    assert(pro3_feature[12] == 0xaa);
+    check_packet(&report, expected);
+    report.gyro_gain = 250;
+    expected[22] = 0xff;
+    expected[23] = 0x7f;
+    expected[24] = 0xfe;
+    check_packet(&report, expected);
+    // At maximum gain an extreme new sample minus its opposite zero point
+    // exceeds a signed 32-bit intermediate but must saturate in the right direction.
+    report.motion.gyro[0] = 16777215;
+    report.motion.gyro[1] = -16777215;
+    expected[20] = 0xff;
+    expected[21] = 0x7f;
+    expected[22] = 0x00;
+    expected[23] = 0x80;
+    check_packet(&report, expected);
+    report.motion_valid = false;
+    memset(expected + 14, 0, sizeof(axes));
+    check_packet(&report, expected);
+}
+
 int main(void)
 {
+    test_motion_packet();
     test_trigger_travel();
     assert(PRO3_INPUT_ID == 4 && PRO3_INPUT_PAYLOAD_SIZE == 31);
     uint8_t expected[PRO3_INPUT_PAYLOAD_SIZE] = {8, 127, 127, 127, 127};

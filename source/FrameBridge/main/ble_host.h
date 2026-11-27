@@ -10,6 +10,8 @@ typedef enum {
 // BOOT toggles the output route. These APIs are safe outside the NimBLE task.
 void ble_host_toggle_mode(void);
 ble_host_state_t ble_host_state(void);
+// True only while the host accepts complete enhanced reports. Safe on any task.
+bool ble_host_motion_ready(void);
 
 // Initialize before starting the NimBLE task. All remaining calls run on its event queue.
 void ble_host_init(void);
@@ -17,3 +19,4 @@ void ble_host_tick(uint8_t own_addr_type);
 void ble_host_reset(void);
 bool ble_host_authorized(uint16_t conn);
 void ble_host_suspend(uint16_t conn, bool suspended);
+bool ble_host_request_enhanced(uint16_t conn);

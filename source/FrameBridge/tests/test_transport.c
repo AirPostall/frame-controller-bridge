@@ -61,6 +61,24 @@ int main(void)
     consume(&bluetooth, &neutral);
     assert(!report_queue_peek(&bluetooth, &report, &pending));
 
-    puts("Report queues preserve taps, route changes and reconnect snapshots.");
+    // Slow hosts can have a sample in flight while the selected hand sends
+    // many more notifications. Reserve at most one follow-up wake, preserving
+    // the queued press and release for the sender to overlay with fresh motion.
+    report_queue samples = {.first = UINT32_MAX, .end = UINT32_MAX};
+    assert(report_queue_request_sample(&samples, &neutral));
+    assert(report_queue_peek(&samples, &report, &pending));
+    assert(report_queue_request_sample(&samples, &neutral));
+    for (unsigned i = 0; i < REPORT_QUEUE_SIZE * 2; ++i)
+        assert(!report_queue_request_sample(&samples, &neutral));
+    assert(!report_queue_push(&samples, &pressed));
+    assert(!report_queue_request_sample(&samples, &pressed));
+    assert(!report_queue_push(&samples, &neutral));
+    report_queue_sent(&samples, pending);
+    consume(&samples, &neutral);
+    consume(&samples, &pressed);
+    consume(&samples, &neutral);
+    assert(!report_queue_peek(&samples, &report, &pending));
+
+    puts("Report queues preserve taps, motion wakeups, route changes and reconnect snapshots.");
     return 0;
 }

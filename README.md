@@ -58,7 +58,7 @@ To make a backup first, open the current setup page and choose **Bindings → Ex
 python -m esptool --chip esp32s3 --port PORT write-flash 0x10000 frame_bridge-paired.bin
 ```
 
-Firmware 5.3.2 updates saved profiles and V3–V7 JSON backups to use each hand’s `0x14` byte 7 for trigger travel. It clears output bindings from both trigger touch contacts and keeps their calibrations available on the **Touch** tab.
+Firmware 5.4.1 adds a gyro reset button to the saved profile and JSON backups. Upgrading from 5.4.0 keeps the selected hand and sensitivity, and starts with reset unbound. Upgrading from 5.3.2 or earlier starts with movement off and sensitivity at 100%. The trigger migration introduced in 5.3.2 still uses each hand’s `0x14` byte 7 for travel, clears output bindings from the two trigger touch contacts and keeps their calibrations on the **Touch** tab.
 
 After either procedure, wait for esptool to finish verifying the image. Tap RESET if the board stays in downloader mode. For wired gameplay connect the board’s **native USB/OTG data port** to the host. For wireless gameplay either USB connector can supply power on boards that support it. On boards with separate USB and UART connectors, the UART connector is for programming and serial access.
 
@@ -108,6 +108,16 @@ Open **Joysticks** on the board setup page. Enable the left or right stick and m
 - **Invert X** reverses horizontal movement. **Invert Y** reverses vertical movement. Each direction can be set independently for each stick.
 
 Fresh profiles start with both sticks disabled, a 0% deadzone, 100% sensitivity and only Y inverted. An upgrade keeps each stick’s previous enable setting and direction.
+
+## Pass movement from one hand
+
+1. On the board’s setup page, open **Movement**. Under **Source hand**, choose **Left hand** or **Right hand**, then **Save to board**. The chosen controller supplies all three accelerometer axes and all three gyroscope axes. To stop sending motion, choose **Off** and save.
+2. Set the selected hand on a table, then tilt and turn it. The page shows the sample count, age and live X/Y/Z readings. Tilting changes the measured direction of gravity. Turning changes the gyroscope readings. Move the other hand separately to verify the selection. Buttons, triggers and sticks still work on both hands.
+3. Use a game or input tester that supports enhanced **8BitDo Pro 3** motion reports. For USB, select the **8BitDo Pro 3** layout when pairing the firmware. For Bluetooth, the host must enable the enhanced input report and negotiate an ATT MTU of at least 34. Standard and Extended USB provide conventional gamepad controls. **Motion output** on the Movement page shows when the bridge can send motion.
+4. If rotation in the game feels too slow or too fast, adjust **Gyroscope sensitivity** (25–250%) and save. At 100%, the angular scale uses an estimate from recorded controller movement. Acceleration and the raw readings on the page use the same scale at every sensitivity setting.
+5. To correct gyro drift, choose a **Gyro reset button** from either hand and **Save to board**. Hold the movement hand still and tap the assigned button once. **Successful gyro resets** increments when the board captures a fresh sample as the zero rate on all three axes. You can also choose a calibrated trigger or grab press. The button keeps its normal bindings. For camera recentering, map the same button to the game’s recenter action.
+
+The board remembers the hand, sensitivity and reset binding across restarts. The captured zero is temporary. Set it again after changing the movement hand, reconnecting it or restarting the board. If the selected hand disconnects or stops reporting, the bridge clears the last motion sample. It resumes when that hand sends fresh data. The enhanced report format follows [SDL’s 8BitDo HID driver](https://github.com/libsdl-org/SDL/blob/main/src/joystick/hidapi/SDL_hidapi_8bitdo.c).
 
 ## Calibrate touch and sensitivity
 

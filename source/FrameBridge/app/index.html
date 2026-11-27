@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#142220"><title>Frame Bridge</title><link rel="stylesheet" href="/style.css"><script defer src="/touch.js"></script><script defer src="/backup.js"></script><script defer src="/ui.js"></script></head>
 <body><header><div class="brand"><span class="mark" aria-hidden="true">⌁</span> Frame Bridge</div><div id="network" role="status">Connecting to board…</div></header>
-<main><nav aria-label="Views"><button id="live-tab" aria-pressed="true" aria-controls="live">Live inputs</button><button id="map-tab" aria-pressed="false" aria-controls="mapping">Bindings</button><button id="sensors-tab" aria-pressed="false" aria-controls="sensors">Touch</button><button id="joysticks-tab" aria-pressed="false" aria-controls="joysticks">Joysticks</button></nav>
+<main><nav aria-label="Views"><button id="live-tab" aria-pressed="true" aria-controls="live">Live inputs</button><button id="map-tab" aria-pressed="false" aria-controls="mapping">Bindings</button><button id="sensors-tab" aria-pressed="false" aria-controls="sensors">Touch</button><button id="joysticks-tab" aria-pressed="false" aria-controls="joysticks">Joysticks</button><button id="movement-tab" aria-pressed="false" aria-controls="movement">Movement</button></nav>
 <section id="live"><div class="title"><h1>Controller inputs</h1><span id="output-hosts" class="pill">Waiting for board</span></div>
 <article id="bound-inputs" class="wide" aria-labelledby="bound-title"><h2 id="bound-title">Saved input bindings</h2>
 <div class="live-groups">
@@ -102,5 +102,24 @@
 <button id="stick-right-revert" type="button" disabled>Revert this stick</button>
 </fieldset>
 </div></section>
+<section id="movement" hidden><div class="title"><h1>Movement</h1><span id="movement-dirty" class="pill">On board</span></div>
+<article class="wide"><h2>Movement passthrough</h2>
+<p>Choose which controller supplies movement data and save the selection to the board. Both hands keep their button and joystick bindings.</p>
+<div class="source-fields"><label for="movement-hand">Source hand</label><select id="movement-hand" disabled><option value="0">Off</option><option value="1">Left hand</option><option value="2">Right hand</option></select></div>
+<div class="stick-slider"><label for="gyro-gain">Gyroscope sensitivity</label><span id="gyro-gain-value">100%</span><input id="gyro-gain" type="range" min="25" max="250" step="1" value="100" aria-describedby="gyro-gain-hint" disabled></div>
+<p class="hint" id="gyro-gain-hint">Adjust the rotation speed sent to the app. Acceleration and the raw readings below stay at their original scale.</p>
+<div class="source-fields"><label for="gyro-reset-button">Gyro reset button</label><select id="gyro-reset-button" aria-describedby="gyro-reset-hint" disabled><option value="0">Unbound</option></select></div>
+<p class="hint" id="gyro-reset-hint">Hold the movement hand still and press the assigned button to zero its rotation rate. To recenter the camera too, use Bindings to map the same button to the game’s recenter control.</p>
+<div class="input-line"><span>On-board source</span><span id="movement-status" role="status">Waiting for board</span></div>
+<div class="input-line"><span>Motion output</span><span id="movement-route">Waiting for board</span></div>
+<div class="input-line"><span>Successful gyro resets</span><span id="gyro-reset-count">—</span></div>
+<div id="movement-axes" hidden>
+  <h3>Raw controller counts</h3>
+  <div class="input-line"><span>Acceleration X / Y / Z</span><code id="movement-accel">—</code></div>
+  <div class="input-line"><span>Gyroscope X / Y / Z</span><code id="movement-gyro">—</code></div>
+</div>
+<p class="hint" id="movement-samples" hidden></p>
+<p class="hint">Use an app that supports motion reports from the bridge. The outgoing gyro scale is estimated, so rotation speed in the app may differ from the controller’s actual speed.</p>
+</article></section>
 <div id="editor" hidden><div class="actions"><button id="save" class="primary" disabled>Save to board</button><button id="defaults">Restore defaults</button></div><p id="message" role="status"></p></div>
 </main></body></html>

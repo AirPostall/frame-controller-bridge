@@ -12,7 +12,10 @@ const BindingBackup = (() => {
   const stickOffset = 1728, stickBytes = 3;
   const defaultStick = {invertX:false, invertY:true, deadzone:0, sensitivity:100};
   const stickProfileSize = stickOffset + 2 * stickBytes;
-  const profileSizes = [172, 174, stickOffset, stickProfileSize, stickProfileSize];
+  const motionOffset = stickProfileSize;
+  const gyroGainOffset = motionOffset + 1;
+  const gyroResetOffset = gyroGainOffset + 1;
+  const profileSizes = [172, 174, stickOffset, stickProfileSize, stickProfileSize, gyroResetOffset, gyroResetOffset + 1];
   const size = version => Number.isInteger(version) ? (profileSizes[version - 3] || 0) : 0;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder('utf-8', {fatal:true, ignoreBOM:true});
@@ -21,8 +24,8 @@ const BindingBackup = (() => {
     return Number.isInteger(value) && value >= 0 && value <= max;
   }
   function stickStart(profile, side) {
-    if ((profile[0] !== 6 && profile[0] !== 7) || profile.length !== size(profile[0]))
-      throw Error('Joystick tuning requires a V6 or V7 profile.');
+    if (profile[0] < 6 || !size(profile[0]) || profile.length !== size(profile[0]))
+      throw Error('Joystick tuning requires a V6 or newer profile.');
     if (!bounded(side, 1)) throw Error('Invalid joystick side.');
     return stickOffset + side * stickBytes;
   }
@@ -45,6 +48,49 @@ const BindingBackup = (() => {
     checkStick(settings);
     const flags = Number(settings.invertX) | (Number(settings.invertY) << 1);
     profile.set([flags, settings.deadzone, settings.sensitivity], start);
+  }
+  function checkMotionProfile(profile) {
+    if (profile[0] < 8 || !size(profile[0]) || profile.length !== size(profile[0]))
+      throw Error('Motion settings require a V8 or newer profile.');
+  }
+  function checkMotionHand(profile, selection) {
+    checkMotionProfile(profile);
+    if (!bounded(selection, 2)) throw Error('Invalid motion source hand.');
+  }
+  function motionHand(profile) {
+    const selection = profile[motionOffset];
+    checkMotionHand(profile, selection);
+    return selection;
+  }
+  function setMotionHand(profile, selection) {
+    checkMotionHand(profile, selection);
+    profile[motionOffset] = selection;
+  }
+  function checkGyroGain(profile, gain) {
+    checkMotionProfile(profile);
+    if (!bounded(gain, 250) || gain < 25) throw Error('Gyroscope sensitivity must be 25–250%.');
+  }
+  function gyroGain(profile) {
+    const gain = profile[gyroGainOffset];
+    checkGyroGain(profile, gain);
+    return gain;
+  }
+  function setGyroGain(profile, gain) {
+    checkGyroGain(profile, gain);
+    profile[gyroGainOffset] = gain;
+  }
+  function checkGyroResetButton(profile, button) {
+    if (profile[0] !== 9 || profile.length !== size(9)) throw Error('A gyro reset button requires a V9 profile.');
+    if (!bounded(button, sourceCount)) throw Error('Invalid gyro reset button.');
+  }
+  function gyroResetButton(profile) {
+    const button = profile[gyroResetOffset];
+    checkGyroResetButton(profile, button);
+    return button;
+  }
+  function setGyroResetButton(profile, button) {
+    checkGyroResetButton(profile, button);
+    profile[gyroResetOffset] = button;
   }
   function checkSource(source) {
     if (!bounded(source, sourceCount - 1)) throw Error('Invalid press source.');
@@ -149,7 +195,7 @@ const BindingBackup = (() => {
         if (channel > 2 || (channel && release === engage)) throw Error('Invalid press travel calibration.');
       }
       const source = version >= 4 ? profile[triggerOffset + side] : 0;
-      if (version === 7 && source === physicalTravel) continue;
+      if (version >= 7 && source === physicalTravel) continue;
       if (source && (source > 24 || profile[34 + (source - 1) * 5] === 255))
         throw Error('The analog trigger source needs a touch calibration.');
     }
@@ -183,6 +229,11 @@ const BindingBackup = (() => {
     }
     const result = {format, version:1, profileVersion:version, left:hand(0), right:hand(1)};
     if (version >= 5) result.outputNames = Array.from({length:actionCount}, (_, i) => name(profile, sourceCount + i));
+    if (version >= 8) {
+      result.motion_hand = motionHand(profile);
+      result.gyro_gain = gyroGain(profile);
+    }
+    if (version >= 9) result.gyro_reset_button = gyroResetButton(profile);
     return result;
   }
 
@@ -206,20 +257,23 @@ const BindingBackup = (() => {
     }
   }
 
-  function decode(data, targetVersion = 7) {
+  function decode(data, targetVersion = 9) {
     if (data?.format !== format || data.version !== 1 || !size(data.profileVersion) || !size(targetVersion))
-      throw Error('Choose a Frame Bridge bindings backup (profile versions 3–7).');
+      throw Error('Choose a Frame Bridge bindings backup (profile versions 3–9).');
     const version = data.profileVersion;
     if (version > targetVersion) throw Error('This backup requires V' + version + ' firmware.');
     const result = new Uint8Array(size(targetVersion));
     result[0] = targetVersion;
+    if (version >= 8) setMotionHand(result, data.motion_hand);
+    if (targetVersion >= 8) setGyroGain(result, version >= 8 ? data.gyro_gain : 100);
+    if (version >= 9) setGyroResetButton(result, data.gyro_reset_button);
     [data.left, data.right].forEach((hand, side) => {
       if (typeof hand?.stickEnabled !== 'boolean') throw Error('Missing stick setting.');
       if (hand.stickEnabled) result[1] |= 1 << side;
       if (targetVersion >= 6) setStick(result, side, version >= 6 ? hand.stick : defaultStick);
       array(hand.touch, 12).forEach((row, i) => result.set(bytes(row, 5), 34 + (side * 12 + i) * 5));
       array(hand.travel, 3).forEach((row, i) => result.set(bytes(row, 3), 154 + (side * 3 + i) * 3));
-      if (version === 7 && hand.analogTriggerSource === 'travel') {
+      if (version >= 7 && hand.analogTriggerSource === 'travel') {
         result[triggerOffset + side] = physicalTravel;
       } else if (version >= 4 && hand.analogTriggerSource !== null) {
         const source = hand.analogTriggerSource;
@@ -246,10 +300,12 @@ const BindingBackup = (() => {
     });
     if (version >= 5) array(data.outputNames, actionCount).forEach((v, i) => setName(result, sourceCount + i, v));
     validate(result);
-    if (targetVersion === 7) usePhysicalTriggers(result, version);
+    if (targetVersion >= 7) usePhysicalTriggers(result, version);
     return result;
   }
 
-  return {encode, decode, mask, setMask, name, setName, stick, setStick, size, triggerOffset, physicalTravel, triggerTouchSlots};
+  return {encode, decode, mask, setMask, name, setName, stick, setStick, motionHand, setMotionHand,
+    gyroGain, setGyroGain, gyroResetButton, setGyroResetButton,
+    motionOffset, size, triggerOffset, physicalTravel, triggerTouchSlots};
 })();
 if (typeof module !== 'undefined') module.exports = BindingBackup;

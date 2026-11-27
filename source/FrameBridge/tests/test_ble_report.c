@@ -6,7 +6,7 @@
 // Check the HOGP characteristic width against the descriptor sent to the host.
 static void check_report_size(void)
 {
-    unsigned size = 0, count = 0, bits = 0, reports = 0;
+    unsigned size = 0, count = 0, id = 0, input_bits[7] = {0}, feature_bits[7] = {0};
     for (size_t pos = 0; pos < ble_pad_report_map_size;) {
         uint8_t prefix = ble_pad_report_map[pos++];
         unsigned length = prefix & 3;
@@ -16,13 +16,18 @@ static void check_report_size(void)
         for (unsigned i = 0; i < length; ++i)
             item |= (unsigned)ble_pad_report_map[pos++] << (8*i);
         switch (prefix & 0xfc) {
-        case 0x84: assert(item == BLE_PAD_INPUT_ID); ++reports; break;
+        case 0x84: assert(item == BLE_PAD_INPUT_ID || item == BLE_PAD_ENHANCED_ID ||
+                          item == PRO3_FEATURE_ID); id = item; break;
         case 0x74: size = item; break;
         case 0x94: count = item; break;
-        case 0x80: assert(reports == 1); bits += size * count; break;
+        case 0x80: input_bits[id] += size * count; break;
+        case 0xb0: feature_bits[id] += size * count; break;
         }
     }
-    assert(reports == 1 && bits == BLE_PAD_INPUT_SIZE * 8);
+    assert(input_bits[BLE_PAD_INPUT_ID] == BLE_PAD_INPUT_SIZE * 8);
+    assert(input_bits[BLE_PAD_ENHANCED_ID] == PRO3_INPUT_PAYLOAD_SIZE * 8);
+    assert(feature_bits[PRO3_FEATURE_ID] == PRO3_FEATURE_SIZE * 8);
+    assert(BLE_PAD_ENHANCED_MTU == PRO3_INPUT_PAYLOAD_SIZE + 3);
 }
 
 int main(void)

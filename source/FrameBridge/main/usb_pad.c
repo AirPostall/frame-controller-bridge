@@ -53,7 +53,9 @@ static const uint8_t pro3_report_descriptor[] = {
     0x05,0x09, 0x19,0x01, 0x29,0x12, 0x25,0x01,
     0x75,0x01, 0x95,0x12, 0x81,0x02,                    // buttons 1..18
     0x75,0x06, 0x95,0x01, 0x81,0x03,                    // align to byte 10
-    0x75,0x08, 0x95,PRO3_INPUT_PAYLOAD_SIZE - 10, 0x81,0x03, // unused vendor data
+    0x06,0x00,0xff, 0x09,0x01, 0x26,0xff,0x00,
+    0x75,0x08, 0x95,PRO3_INPUT_PAYLOAD_SIZE - 10, 0x81,0x02, // enhanced vendor data including IMU
+    PRO3_FEATURE_DESCRIPTOR,
     0xc0,
 };
 static const uint8_t pro3_configuration[] = {
@@ -88,6 +90,12 @@ static size_t encode_report(const pad_report *r, uint8_t buffer[PRO3_INPUT_PAYLO
 uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t id, hid_report_type_t type,
                                uint8_t *buffer, uint16_t requested)
 {
+    if (!instance && pairing.usb_layout == USB_LAYOUT_PRO3 && id == PRO3_FEATURE_ID &&
+        type == HID_REPORT_TYPE_FEATURE && requested) {
+        size_t length = requested < PRO3_FEATURE_SIZE ? requested : PRO3_FEATURE_SIZE;
+        memcpy(buffer, pro3_feature, length);
+        return length;
+    }
     if (instance || id != input_report_id() || type != HID_REPORT_TYPE_INPUT) return 0;
     pad_report report;
     bridge_get_output(false, &report);

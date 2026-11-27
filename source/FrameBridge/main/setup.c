@@ -45,7 +45,11 @@ static esp_err_t snapshot(httpd_req_t *req)
     bridge_status s;
     bridge_get_status(&s);
     static const char digits[] = "0123456789abcdef";
-    char raw[HAND_COUNT][RAW_CHANNELS * 2 + 1] = {0}, body[576];
+    char raw[HAND_COUNT][RAW_CHANNELS * 2 + 1] = {0}, body[896];
+    const motion_sample *motion = &s.output.motion;
+    int64_t age_ms = s.motion_time_us ? (esp_timer_get_time() - s.motion_time_us) / 1000 : -1;
+    const char *route = s.bluetooth_mode ? (ble_host_motion_ready() ? "bluetooth" : "none") :
+                        (s.usb && pairing.usb_layout == USB_LAYOUT_PRO3 ? "usb" : "none");
     for (unsigned h = 0; h < HAND_COUNT; ++h) {
         for (unsigned i = 0; i < RAW_CHANNELS; ++i) {
             uint8_t b = s.hands[h].raw[i];
@@ -53,10 +57,12 @@ static esp_err_t snapshot(httpd_req_t *req)
             raw[h][2*i+1] = digits[b & 15];
         }
     }
-    snprintf(body, sizeof(body),
+    int length = snprintf(body, sizeof(body),
         "{\"raw\":[\"%s\",\"%s\"],\"seen\":[%u,%u],\"epoch\":[%lu,%lu],\"active\":[%u,%u],\"usb\":%u,\"bluetoothMode\":%u,\"bluetooth\":%u,\"usbLayout\":%u,\"standardUsb\":%u,\"up\":[%u,%u],\"masks\":[%u,%u],\"axes\":[[%d,%d],[%d,%d]],"
         "\"travel\":[%u,%u],\"packets\":[%lu,%lu],\"buttons\":%u,\"hat\":%u,"
-        "\"triggers\":[%u,%u],\"bad\":%lu,\"overflows\":%lu,\"bluetoothOverflows\":%lu}",
+        "\"triggers\":[%u,%u],\"bad\":%lu,\"overflows\":%lu,\"bluetoothOverflows\":%lu,"
+        "\"motion\":{\"hand\":%u,\"samples\":%lu,\"zeroCount\":%lu,\"ageMs\":%lld,\"valid\":%s,\"route\":\"%s\","
+        "\"accel\":[%ld,%ld,%ld],\"gyro\":[%ld,%ld,%ld]}}",
         raw[0], raw[1], s.hands[0].seen, s.hands[1].seen,
         (unsigned long)s.epoch[0], (unsigned long)s.epoch[1], s.hands[0].active, s.hands[1].active,
         s.usb, s.bluetooth_mode, (unsigned)ble_host_state(), pairing.usb_layout, pairing.usb_layout == USB_LAYOUT_STANDARD,
@@ -66,10 +72,16 @@ static esp_err_t snapshot(httpd_req_t *req)
         (unsigned long)s.packets[0], (unsigned long)s.packets[1],
         pad_usb_buttons(&s.output), s.output.bytes[2],
         s.output.trigger_level[0], s.output.trigger_level[1],
-        (unsigned long)s.bad, (unsigned long)s.overflows, (unsigned long)s.ble_overflows);
+        (unsigned long)s.bad, (unsigned long)s.overflows, (unsigned long)s.ble_overflows,
+        s.motion_hand, (unsigned long)s.motion_samples, (unsigned long)s.gyro_zero_count, (long long)age_ms,
+        s.output.motion_valid ? "true" : "false", route,
+        (long)motion->accel[0], (long)motion->accel[1], (long)motion->accel[2],
+        (long)motion->gyro[0], (long)motion->gyro[1], (long)motion->gyro[2]);
+    if (length < 0 || (size_t)length >= sizeof(body))
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "State exceeds buffer");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_sendstr(req, body);
+    return httpd_resp_send(req, body, length);
 }
 
 static esp_err_t profile_get(httpd_req_t *req)

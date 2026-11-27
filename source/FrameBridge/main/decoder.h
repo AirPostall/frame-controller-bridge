@@ -2,8 +2,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "motion_input.h"
 
 enum { LEFT_HAND, RIGHT_HAND, HAND_COUNT };
+// Profile wire values: 0 disables motion and 1 + hand selects a controller.
+enum { MOTION_OFF = 0, MOTION_LEFT = 1 + LEFT_HAND, MOTION_RIGHT = 1 + RIGHT_HAND };
+enum { GYRO_GAIN_MIN = 25, GYRO_GAIN_DEFAULT = 100, GYRO_GAIN_MAX = 250 };
 enum { UNBOUND, PAD_A, PAD_B, PAD_X, PAD_Y, PAD_LB, PAD_RB, PAD_SELECT, PAD_START,
        PAD_L3, PAD_R3, PAD_HOME, PAD_UP, PAD_RIGHT, PAD_DOWN, PAD_LEFT,
        PAD_LT, PAD_RT, PAD_L_GRAB, PAD_R_GRAB, PAD_R_STEAM, PAD_L_GRAB_FULL, PAD_R_GRAB_FULL, ACTION_COUNT };
@@ -11,7 +15,7 @@ enum { CONTACT_BYTES = 14, RAW_CHANNELS = 18, TOUCH_SLOTS = 12, LEFT_TOUCH_SLOTS
        TRAVEL_SLOTS = 3, LEGACY_PROFILE_BYTES = 174, V3_PROFILE_BYTES = 172, V4_PROFILE_BYTES = 174,
        CLICK_SOURCES = HAND_COUNT * 16, PRESS_SOURCES = CLICK_SOURCES + HAND_COUNT * TRAVEL_SLOTS,
        NAME_SLOTS = PRESS_SOURCES + ACTION_COUNT - 1, NAME_BYTES = 24,
-       V5_PROFILE_BYTES = 1728, PROFILE_VERSION = 7,
+       V5_PROFILE_BYTES = 1728, V7_PROFILE_BYTES = 1734, V8_PROFILE_BYTES = 1736, PROFILE_VERSION = 9,
        TRIGGER_PHYSICAL_TRAVEL = HAND_COUNT * TOUCH_SLOTS + 1,
        TRIGGER_TRAVEL_CHANNEL = 2, TRIGGER_RAW = CONTACT_BYTES + 1 };
 enum { WHOLE_BYTE, LOW_NIBBLE, HIGH_NIBBLE, BIT_ZERO, BIT_SEVEN = BIT_ZERO + 7 };
@@ -49,11 +53,17 @@ typedef struct {
     // UTF-8, NUL-terminated and padded. Press source aliases precede output aliases A..R4.
     uint8_t names[NAME_SLOTS][NAME_BYTES];
     stick_settings sticks[HAND_COUNT];
+    uint8_t motion_hand, gyro_gain; // Gyroscope gain as a percentage.
+    uint8_t gyro_reset_button;      // 0 = unbound, otherwise 1 + click or travel press-source index.
 } pad_profile;
 
 typedef struct {
     uint8_t bytes[12];         // Existing extended USB report layout.
     uint8_t trigger_level[2];  // Pro 3 analog triggers, in LT/RT order.
+    bool motion_valid;
+    uint8_t gyro_gain;         // Percentage applied to the nominal Pro 3 rotational rate.
+    uint32_t motion_tick_us;   // Microseconds on the bridge clock, modulo 2^32.
+    motion_sample motion;
 } pad_report;
 
 void pad_defaults(pad_profile *profile);

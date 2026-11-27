@@ -231,9 +231,41 @@ async function request(path, options={}) {
 }
 function refreshDirtyState() {
   const changed = !!draft && draft.some((v,i)=>v!==saved[i]);
-  label('dirty',changed ? 'Unsaved changes' : 'On board');
-  label('stick-dirty',changed ? 'Unsaved changes' : 'On board');
+  for (const id of ['dirty','stick-dirty','movement-dirty']) label(id, changed ? 'Unsaved changes' : 'On board');
   byId('save').disabled = !changed || saving || !latest;
+}
+function updateMovementStatus(state) {
+  if (currentView !== 'movement') return;
+  const motion = state?.motion;
+  const side = sides[motion?.hand - 1];
+  const connected = side && state.up[motion.hand - 1];
+  const hasSample = connected && motion.ageMs >= 0;
+  const fresh = hasSample && motion.valid && motion.ageMs < 250;
+  let status = 'Waiting for board';
+  if (motion?.hand === 0) status = 'Off';
+  if (side) status = side + ' hand' + (!connected ? ' · offline' : !hasSample ? ' · waiting for data' :
+    fresh ? '' : ' · stale data');
+  label('movement-status', status);
+  const routes = {usb:'USB', bluetooth:'Bluetooth', none:state && !usesBluetooth(state) && usbLayout(state) !== 2
+    ? 'Select the wired Pro 3 layout for USB motion' : 'Waiting for a compatible host'};
+  label('movement-route', motion?.hand === 0 ? 'Off' : routes[motion?.route] || 'Waiting for board');
+  label('gyro-reset-count', motion?.zeroCount ?? '—');
+  byId('movement-axes').hidden = !fresh;
+  for (const axis of ['accel','gyro']) label('movement-' + axis, fresh ? motion[axis].join(' / ') : '—');
+  byId('movement-samples').hidden = !hasSample;
+  if (hasSample) label('movement-samples', motion.samples + ' samples received · Last sample ' + motion.ageMs + ' ms ago');
+}
+function refreshMovementEditor() {
+  const hand = byId('movement-hand'), gain = byId('gyro-gain'), button = byId('gyro-reset-button');
+  hand.disabled = gain.disabled = button.disabled = !draft || saving;
+  if (!draft) return;
+  hand.value = String(BindingBackup.motionHand(draft));
+  button.value = String(BindingBackup.gyroResetButton(draft));
+  // Keep imported contact shortcuts visible without offering trigger touch as a click.
+  for (const source of [7,23]) gyroButtonOptions[source].hidden = button.value !== String(source + 1);
+  gain.value = String(BindingBackup.gyroGain(draft));
+  gain.setAttribute('aria-valuetext', gain.value + '%');
+  label('gyro-gain-value', gain.value + '%');
 }
 function redrawBindings() {
   refreshDirtyState();
@@ -243,6 +275,8 @@ function redrawBindings() {
   byId('mapping').inert = saving;
   byId('sensors').inert = saving;
   byId('joysticks').inert = saving;
+  refreshMovementEditor();
+  updateMovementStatus(latest);
   refreshSensorEditor();
   refreshTriggerSettings();
   refreshSourceEditor();
@@ -436,6 +470,7 @@ function updateLiveBindings(state) {
 function showState(state) {
   updateTriggerLevels(state);
   updateStickPreview(state);
+  updateMovementStatus(state);
   label('network','Board connected');
   const wireless = usesBluetooth(state);
   const ready = wireless ? state.bluetooth === 4 : state.usb;
@@ -486,8 +521,8 @@ async function poll() {
       const previousSaved = saved;
       const p=await request('/api/profile');
       if (!defaultProfile || p[0] !== defaultProfile[0]) defaultProfile=await request('/api/defaults');
-      if (p[0] !== 7 || p[0] !== defaultProfile[0] ||
-          [p,defaultProfile].some(x => x.length !== BindingBackup.size(7))) {
+      if (p[0] !== 9 || p[0] !== defaultProfile[0] ||
+          [p,defaultProfile].some(x => x.length !== BindingBackup.size(9))) {
         throw Error('Reload setup to match the board firmware.');
       }
       if (saved === previousSaved && (!saved || p.length !== saved.length || p.some((v,i) => v !== saved[i]))) {
@@ -530,7 +565,7 @@ function openView(view) {
   endBinding();
   label('source-note', '');
   stopWizard();
-  for(const [tab,section] of [['live-tab','live'],['map-tab','mapping'],['sensors-tab','sensors'],['joysticks-tab','joysticks']]){
+  for(const [tab,section] of [['live-tab','live'],['map-tab','mapping'],['sensors-tab','sensors'],['joysticks-tab','joysticks'],['movement-tab','movement']]){
     byId(section).hidden=view!==section;
     byId(tab).setAttribute('aria-pressed',String(view===section));
   }
@@ -539,12 +574,17 @@ function openView(view) {
   redrawBindings();
 }
 
-const sourceOptions = [], sourceChecks = [];
+const sourceOptions = [], sourceChecks = [], gyroButtonOptions = [];
 for (let source = 0; source < sourceCount; ++source) {
   const option = document.createElement('option');
   option.value = String(source);
   byId('binding-source').append(option);
   sourceOptions.push(option);
+  const resetOption = document.createElement('option');
+  resetOption.value = String(source + 1);
+  if (source === 7 || source === 23) resetOption.hidden = resetOption.disabled = true;
+  byId('gyro-reset-button').append(resetOption);
+  gyroButtonOptions.push(resetOption);
 }
 for (let action = 1; action < names.length; ++action) {
   const option = document.createElement('label');
@@ -575,6 +615,10 @@ function refreshSourceEditor() {
     const signal = source < 32 && measuredButtons[Math.floor(source / 16)][source % 16] ? ' · bit ' + source % 16 : '';
     const title = (alias ? alias + ' (' + canonical + ')' : canonical) + signal;
     if (option.textContent !== title) option.textContent = title;
+    const resetOption = gyroButtonOptions[source];
+    const resetTitle = source >= 32 && draft && !draft[travelOffset(source - 32)]
+      ? title + ' · calibrate in Bindings' : title;
+    if (resetOption.textContent !== resetTitle) resetOption.textContent = resetTitle;
   }
   select.value = String(selectedSource);
   if (document.activeElement !== name) name.value = draft ? BindingBackup.name(draft, selectedSource) : '';
@@ -853,6 +897,24 @@ byId('live-tab').onclick=()=>openView('live');
 byId('map-tab').onclick=()=>openView('mapping');
 byId('sensors-tab').onclick=()=>openView('sensors');
 byId('joysticks-tab').onclick=()=>openView('joysticks');
+byId('movement-tab').onclick=()=>openView('movement');
+byId('movement-hand').onchange=event=>{
+  if (!draft || saving) return;
+  BindingBackup.setMotionHand(draft, Number(event.target.value));
+  refreshDirtyState();
+};
+byId('gyro-gain').oninput=event=>{
+  if (!draft || saving) return;
+  BindingBackup.setGyroGain(draft, event.target.valueAsNumber);
+  refreshMovementEditor();
+  refreshDirtyState();
+};
+byId('gyro-reset-button').onchange=event=>{
+  if (!draft || saving) return;
+  BindingBackup.setGyroResetButton(draft, Number(event.target.value));
+  refreshMovementEditor();
+  refreshDirtyState();
+};
 document.addEventListener('visibilitychange',()=>{
   clearTimeout(timer);
   if(document.hidden && learning) endBinding('Learning paused. Choose Learn to try again.');

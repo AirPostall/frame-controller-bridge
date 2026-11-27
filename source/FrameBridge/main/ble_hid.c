@@ -22,8 +22,10 @@ static const uint8_t ble_pad_pnp_id[] = {
     BLE_PAD_VERSION & 0xff, BLE_PAD_VERSION >> 8
 };
 static const uint8_t hid_info[] = {0x11, 0x01, 0, 0x02}; // HID 1.11, normally connectable.
-static const uint8_t report_reference[] = {BLE_PAD_INPUT_ID, 1}; // Input report
-static uint16_t input_handle;
+static uint8_t control_reference[] = {BLE_PAD_INPUT_ID, 1};
+static uint8_t enhanced_reference[] = {BLE_PAD_ENHANCED_ID, 1};
+static uint8_t feature_reference[] = {PRO3_FEATURE_ID, 3};
+static uint16_t input_handle, enhanced_handle;
 _Static_assert(BLE_PAD_INPUT_SIZE <= BLE_ATT_MTU_DFLT - 3, "input must fit a default ATT notification");
 
 static int append(struct os_mbuf *om, const uint8_t *value, size_t length)
@@ -34,7 +36,7 @@ static int append(struct os_mbuf *om, const uint8_t *value, size_t length)
 static int access_value(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_DSC)
-        return append(ctxt->om, report_reference, sizeof(report_reference));
+        return append(ctxt->om, arg, 2);
 
     switch (ble_uuid_u16(ctxt->chr->uuid)) {
     case UUID_HID_INFO:
@@ -44,10 +46,15 @@ static int access_value(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctx
         return append(ctxt->om, ble_pad_report_map, ble_pad_report_map_size);
     case UUID_REPORT: {
         if (!ble_host_authorized(conn)) return BLE_ATT_ERR_INSUFFICIENT_AUTHOR;
+        if (arg == feature_reference) {
+            if (!ble_host_request_enhanced(conn)) return BLE_ATT_ERR_UNLIKELY;
+            return append(ctxt->om, pro3_feature, sizeof(pro3_feature));
+        }
         pad_report report;
         bridge_get_output(true, &report);
-        uint8_t value[BLE_PAD_INPUT_SIZE];
-        size_t length = pro3_encode_controls(&report, value);
+        uint8_t value[PRO3_INPUT_PAYLOAD_SIZE];
+        size_t length = arg == enhanced_reference ? pro3_encode(&report, value) :
+                                                    pro3_encode_controls(&report, value);
         return append(ctxt->om, value, length);
     }
     case UUID_CONTROL_POINT: {
@@ -71,11 +78,11 @@ static int access_value(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctx
     }
 }
 
-static struct ble_gatt_dsc_def input_descriptors[] = {
-    {.uuid = BLE_UUID16_DECLARE(UUID_REPORT_REFERENCE), .att_flags = BLE_ATT_F_READ | BLE_ATT_F_READ_ENC,
-     .access_cb = access_value},
-    {0}
-};
+#define REPORT_REFERENCE(ref) { .uuid = BLE_UUID16_DECLARE(UUID_REPORT_REFERENCE), \
+    .att_flags = BLE_ATT_F_READ | BLE_ATT_F_READ_ENC, .access_cb = access_value, .arg = (ref) }
+static struct ble_gatt_dsc_def input_descriptors[] = {REPORT_REFERENCE(control_reference), {0}};
+static struct ble_gatt_dsc_def enhanced_descriptors[] = {REPORT_REFERENCE(enhanced_reference), {0}};
+static struct ble_gatt_dsc_def feature_descriptors[] = {REPORT_REFERENCE(feature_reference), {0}};
 
 // This gamepad uses Report Protocol only. NimBLE adds the CCCD to the input report.
 static const struct ble_gatt_chr_def hid_chars[] = {
@@ -85,7 +92,12 @@ static const struct ble_gatt_chr_def hid_chars[] = {
      .access_cb = access_value},
     {.uuid = BLE_UUID16_DECLARE(UUID_REPORT),
      .flags = ENCRYPTED_READ | BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_NOTIFY_INDICATE_ENC,
-     .access_cb = access_value, .descriptors = input_descriptors, .val_handle = &input_handle},
+     .access_cb = access_value, .arg = control_reference, .descriptors = input_descriptors, .val_handle = &input_handle},
+    {.uuid = BLE_UUID16_DECLARE(UUID_REPORT),
+     .flags = ENCRYPTED_READ | BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_NOTIFY_INDICATE_ENC,
+     .access_cb = access_value, .arg = enhanced_reference, .descriptors = enhanced_descriptors, .val_handle = &enhanced_handle},
+    {.uuid = BLE_UUID16_DECLARE(UUID_REPORT), .flags = ENCRYPTED_READ, .access_cb = access_value,
+     .arg = feature_reference, .descriptors = feature_descriptors},
     {0}
 };
 static const struct ble_gatt_chr_def device_chars[] = {
@@ -114,13 +126,19 @@ uint16_t ble_hid_input_handle(void)
     return input_handle;
 }
 
+uint16_t ble_hid_enhanced_handle(void)
+{
+    return enhanced_handle;
+}
+
 int ble_hid_notify(uint16_t conn, const pad_report *report)
 {
     if (!ble_host_authorized(conn)) return BLE_HS_ENOTCONN;
-    uint8_t value[BLE_PAD_INPUT_SIZE];
-    size_t length = pro3_encode_controls(report, value);
+    uint8_t value[PRO3_INPUT_PAYLOAD_SIZE];
+    bool enhanced = ble_host_motion_ready();
+    size_t length = enhanced ? pro3_encode(report, value) : pro3_encode_controls(report, value);
     // The Report Reference descriptor supplies the ID. HOGP carries only the payload.
     struct os_mbuf *om = ble_hs_mbuf_from_flat(value, length);
     if (!om) return BLE_HS_ENOMEM;
-    return ble_gatts_notify_custom(conn, input_handle, om);
+    return ble_gatts_notify_custom(conn, enhanced ? enhanced_handle : input_handle, om);
 }

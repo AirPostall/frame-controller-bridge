@@ -1,6 +1,9 @@
 #include "pro3.h"
 #include <string.h>
 
+// Wire byte 13 = 0xaa advertises the microsecond sample timestamp to the host.
+const uint8_t pro3_feature[PRO3_FEATURE_SIZE] = {[12] = 0xaa};
+
 static uint8_t stick_value(const uint8_t little_endian[2])
 {
     int32_t value = (int16_t)(little_endian[0] | ((uint16_t)little_endian[1] << 8));
@@ -44,9 +47,30 @@ size_t pro3_encode_controls(const pad_report *report, uint8_t out[PRO3_CONTROL_B
     return PRO3_CONTROL_BYTES;
 }
 
+static void put_sensor_axis(uint8_t *out, int64_t raw, int32_t divisor)
+{
+    int64_t counts = raw / divisor;
+    if (counts > INT16_MAX) counts = INT16_MAX;
+    if (counts < INT16_MIN) counts = INT16_MIN;
+    uint16_t wire = (uint16_t)counts;
+    out[0] = (uint8_t)wire;
+    out[1] = (uint8_t)(wire >> 8);
+}
+
 size_t pro3_encode(const pad_report *report, uint8_t out[PRO3_INPUT_PAYLOAD_SIZE])
 {
     pro3_encode_controls(report, out);
     memset(out + PRO3_CONTROL_BYTES, 0, PRO3_INPUT_PAYLOAD_SIZE - PRO3_CONTROL_BYTES);
+    if (report->motion_valid) {
+        // SDL_hidapi_8bitdo.c reads six LE16 fields at byte 15 including report ID.
+        // The Frame capture suggests 16384 counts/g and ~65.5 counts/(degree/s).
+        // Pro 3 uses 4096 counts/g and 32767 counts per 2000 degrees/s.
+        for (unsigned axis = 0; axis < 3; ++axis) {
+            put_sensor_axis(out + 14 + 2 * axis, report->motion.accel[axis], 4);
+            // Subtracting a signed 24-bit zero point can double the raw range.
+            put_sensor_axis(out + 20 + 2 * axis, (int64_t)report->motion.gyro[axis] * report->gyro_gain, 400);
+        }
+    }
+    for (unsigned i = 0; i < 4; ++i) out[26 + i] = (uint8_t)(report->motion_tick_us >> (8 * i));
     return PRO3_INPUT_PAYLOAD_SIZE;
 }

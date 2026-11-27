@@ -54,6 +54,7 @@ def input_fields(report):
     """Expand HID short items from the FrameBridge descriptor into input bit offsets."""
     fields = defaultdict(list)
     offsets = defaultdict(int)
+    feature_bits = defaultdict(int)
     state, usages, globals_stack = {}, [], []
     minimum = None
     pos = 0
@@ -95,9 +96,12 @@ def input_fields(report):
                         elif (page, usage) == (1, 0x39):
                             fields[3].append(field)
                 offsets[report_id] += width * count
+            elif tag == 11:  # Feature reports have independent offsets from input reports.
+                feature_bits[state.get(8, 0)] += state[7] * state[9]
             usages.clear()
             minimum = None
     require(not globals_stack, 'Unbalanced HID global state')
+    require(dict(feature_bits) == {6: 104}, 'Expected the 13-byte Pro 3 sensor capability report (ID 6)')
     return fields, offsets
 
 
@@ -184,12 +188,14 @@ def main():
     image = args.app.read_bytes()
     layout = inspect(image)
     require(image[layout['record'] + 36] == 2, 'Factory image must default to the wired Pro 3 layout')
-    names = ('pro3_device', 'pro3_configuration', 'pro3_report_descriptor')
+    names = ('pro3_device', 'pro3_configuration', 'pro3_report_descriptor', 'pro3_feature')
     symbols = flash_symbols(args.elf, image, names)
-    device, config, report = (symbols[name] for name in names)
+    device, config, report, feature = (symbols[name] for name in names)
+    require(len(feature) == 13 and feature[12] == 0xaa, 'Pro 3 timestamp capability missing')
     require(device[:2] == bytes((18, 1)) and len(device) == 18, 'Invalid USB device descriptor')
     packet_size = usb_inputs(config, len(report))
     fields, offsets = input_fields(report)
+    require(dict(offsets) == {4: 248}, 'Expected 31-byte wired enhanced input (ID 4)')
     for report_id, bits in offsets.items():
         require((bits + 7)//8 + bool(report_id) <= packet_size, 'Input report exceeds the interrupt endpoint')
     ids, bindings = check_apple_mapping(bundle, 'USB', struct.unpack_from('<HHH', device, 8), fields)
@@ -203,7 +209,8 @@ def main():
         source, vendor, product, revision = struct.unpack('<BHHH', ble['ble_pad_pnp_id'])
         require(source == 2, 'Expected USB-IF vendor namespace in the BLE Device Information Service')
         ble_fields, ble_offsets = input_fields(ble['ble_pad_report_map'])
-        require(dict(ble_offsets) == {4: 80}, 'Expected one ten-byte Bluetooth input report with ID 4')
+        require(dict(ble_offsets) == {4: 80, 1: 248},
+                'Expected Bluetooth ten-byte controls (ID 4) and 31-byte enhanced input (ID 1)')
         _, ble_bindings = check_apple_mapping(bundle, 'Bluetooth', (vendor, product, revision), ble_fields)
         require(ble_bindings == bindings, 'USB and Bluetooth Pro 3 controls disagree')
         print(f'Apple Bluetooth match: {vendor:04x}:{product:04x}, revision {revision:04x}; '

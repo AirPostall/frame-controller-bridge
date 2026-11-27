@@ -1,9 +1,11 @@
 #include "ble_host.h"
 #include "ble_hid.h"
+#include "ble_report.h"
 #include "bridge.h"
 #include <stdatomic.h>
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "host/ble_att.h"
 #include "host/ble_gap.h"
 #include "host/ble_hs.h"
 #include "host/ble_store.h"
@@ -29,15 +31,17 @@ static atomic_uint requested_mode;
 static atomic_bool mode_event_ready;
 static struct ble_npl_event mode_event;
 static atomic_int state = BLE_HOST_OFF;
+static atomic_bool enhanced_ready;
 
 // All of the following are owned by the NimBLE host task.
 static ble_addr_t preferred;
 static bool bluetooth_mode, have_preferred, open_advertisement;
 static int64_t pairing_until, security_until;
 static uint16_t host_conn = BLE_HS_CONN_HANDLE_NONE;
-static bool secure, subscribed, suspended, closing;
+static bool secure, subscribed, enhanced_subscribed, enhanced_requested, suspended, closing;
 
 ble_host_state_t ble_host_state(void) { return atomic_load(&state); }
+bool ble_host_motion_ready(void) { return atomic_load(&enhanced_ready); }
 
 void ble_host_toggle_mode(void)
 {
@@ -53,10 +57,28 @@ bool ble_host_authorized(uint16_t conn)
 
 static void update_ready(void)
 {
-    bool ready = ble_host_authorized(host_conn) && subscribed && !suspended;
-    if (ready != (ble_host_state() == BLE_HOST_READY))
+    bool active = ble_host_authorized(host_conn) && !suspended;
+    bool enhanced = active && enhanced_requested && enhanced_subscribed &&
+                    ble_att_mtu(host_conn) >= BLE_PAD_ENHANCED_MTU;
+    bool changed = atomic_exchange(&enhanced_ready, enhanced) != enhanced;
+    bool ready = active && (subscribed || enhanced);
+    bool was_ready = ble_host_state() == BLE_HOST_READY;
+    // Send a fresh gamepad snapshot when switching characteristics on a live link.
+    if (changed && ready && was_ready) bridge_ble_online(host_conn, false);
+    if (ready != was_ready || (changed && ready))
         bridge_ble_online(host_conn, ready);
     atomic_store(&state, !bluetooth_mode ? BLE_HOST_OFF : ready ? BLE_HOST_READY : BLE_HOST_CONNECTED);
+}
+
+bool ble_host_request_enhanced(uint16_t conn)
+{
+    if (!ble_host_authorized(conn)) return false;
+    // Keep an early probe pending across CCCD writes, MTU exchange and resume.
+    // Returning sensor capabilities early would make some HIDAPI clients treat
+    // the ten-byte legacy control packet as if it already had 31 payload bytes.
+    enhanced_requested = true;
+    update_ready();
+    return ble_host_motion_ready();
 }
 
 void ble_host_suspend(uint16_t conn, bool sleep)
@@ -123,7 +145,8 @@ static void disconnected(void)
 {
     if (ble_host_state() == BLE_HOST_READY) bridge_ble_online(host_conn, false);
     host_conn = BLE_HS_CONN_HANDLE_NONE;
-    secure = subscribed = suspended = closing = false;
+    secure = subscribed = enhanced_subscribed = enhanced_requested = suspended = closing = false;
+    atomic_store(&enhanced_ready, false);
     atomic_store(&state, BLE_HOST_OFF);
 }
 
@@ -179,11 +202,17 @@ static int host_event(struct ble_gap_event *event, void *arg)
         break;
     }
     case BLE_GAP_EVENT_SUBSCRIBE:
-        if (event->subscribe.conn_handle == host_conn &&
-            event->subscribe.attr_handle == ble_hid_input_handle()) {
-            subscribed = event->subscribe.cur_notify;
+        if (event->subscribe.conn_handle == host_conn) {
+            if (event->subscribe.attr_handle == ble_hid_input_handle())
+                subscribed = event->subscribe.cur_notify;
+            else if (event->subscribe.attr_handle == ble_hid_enhanced_handle())
+                enhanced_subscribed = event->subscribe.cur_notify;
+            else break;
             update_ready();
         }
+        break;
+    case BLE_GAP_EVENT_MTU:
+        if (event->mtu.conn_handle == host_conn) update_ready();
         break;
     case BLE_GAP_EVENT_REPEAT_PAIRING:
         if (event->repeat_pairing.conn_handle != host_conn || closing || !in_pairing_window() ||

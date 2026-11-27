@@ -23,6 +23,15 @@ static inline bool report_queue_push(report_queue *q, const pad_report *report)
     return full;
 }
 
+// The sender overlays the freshest motion when it dequeues a control report.
+// One extra slot handles a sample arriving while the head is already in flight.
+static inline bool report_queue_request_sample(report_queue *q, const pad_report *controls)
+{
+    if (q->end - q->first >= 2) return false;
+    report_queue_push(q, controls);
+    return true;
+}
+
 static inline void report_queue_sync(report_queue *q, bool online, const pad_report *snapshot)
 {
     report_queue_reset(q);
